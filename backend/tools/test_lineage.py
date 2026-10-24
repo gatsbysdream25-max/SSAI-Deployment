@@ -3,6 +3,7 @@
 Run:  swarmsentinel-env/bin/python3 backend/tools/test_lineage.py"""
 import json
 import os
+import re
 import sys
 import tempfile
 import unittest
@@ -145,7 +146,8 @@ class Version(unittest.TestCase):
     def test_git_checkout_is_read_without_running_git(self):
         with mock.patch.dict(os.environ, {'SSAI_VERSION': ''}):
             v = L.code_version()
-        self.assertTrue(v == 'unknown' or len(v) == 12, v)
+        # A git checkout gives the 12-character commit; a release package gives its VERSION file, e.g. 'v0.1.2 (df1ec3a4ee60)'.
+        self.assertTrue(v == 'unknown' or len(v) == 12 or re.fullmatch(r'\S+ \([0-9a-f]{12}\)', v), v)
 
 
 class Restore(Base):

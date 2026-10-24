@@ -95,7 +95,8 @@ save_current_version() {
   local excludes=() name
   for name in "${KEEP_TOP[@]}"; do excludes+=(--exclude="./$name"); done
   # Written beside the install first and moved in after: an archive created inside the folder it is archiving trips tar.
-  tar czf "$WORK/backup.tar.gz" "${excludes[@]}" --exclude='./backend/instance' --exclude='__pycache__' -C "$REPO" .
+  # deploy/rendered holds unit files install.sh generated for review (possibly owned by root); it is not part of a release.
+  tar czf "$WORK/backup.tar.gz" "${excludes[@]}" --exclude='./backend/instance' --exclude='./deploy/rendered' --exclude='__pycache__' -C "$REPO" .
   mv -f "$WORK/backup.tar.gz" "$REPO/.update-backup.tar.gz"
   log "saved the current version (.update-backup.tar.gz)"
 }
@@ -125,7 +126,11 @@ restore_previous_version() {
   brought="$(comm -13 <(tar tzf "$REPO/.update-backup.tar.gz" | grep -v '/$' | sed 's,^\./,,' | sort) <(list_files "$NEW") || true)"
   # shellcheck disable=SC2162
   [ -z "$brought" ] || while read path; do rm -f "$REPO/$path"; done <<< "$brought"
-  tar xzf "$REPO/.update-backup.tar.gz" -C "$REPO"
+  # Keep going if a few files cannot be written (a file owned by someone else): say so, then check the result below.
+  tar xzf "$REPO/.update-backup.tar.gz" -C "$REPO" --overwrite || log "WARNING: some files could not be put back; check $REPO"
+  if [ "$(awk '{print $1; exit}' "$REPO/VERSION")" != "$INSTALLED" ]; then
+    log "WARNING: the install still says $(awk '{print $1; exit}' "$REPO/VERSION") instead of $INSTALLED; restore it by hand from $REPO/.update-backup.tar.gz"
+  fi
   if [ "$DEPS_CHANGED" = 1 ]; then
     "$REPO/swarmsentinel-env/bin/pip" install --disable-pip-version-check --quiet -r "$REPO/requirements.txt" || true
   fi
