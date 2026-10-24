@@ -11,7 +11,7 @@ def get_status():
     """Quick counts (all threats, active threats, active agents) for health displays."""
     total_threats = Threat.query.count()
     active_threats = Threat.query.filter_by(status='active').count()
-    active_agents = Agent.query.filter_by(status='active').count()
+    active_agents = Agent.active_count()
     return jsonify({
         'total_threats': total_threats,
         'active_threats': active_threats,

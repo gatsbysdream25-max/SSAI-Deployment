@@ -28,7 +28,7 @@ REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 . "$REPO/deploy/update-lib.sh"
 cd "$REPO"
 # An install unpacked from a release package has no git history. It updates from the newest published release instead.
-if [ ! -d .git ]; then exec "$REPO/deploy/update-package.sh" ${ORIGINAL_ARGS[@]+"${ORIGINAL_ARGS[@]}"}; fi
+if [ ! -d .git ]; then exec bash "$REPO/deploy/update-package.sh" ${ORIGINAL_ARGS[@]+"${ORIGINAL_ARGS[@]}"}; fi
 PY="$REPO/swarmsentinel-env/bin/python3"
 [ -x "$PY" ] || die "no virtualenv at $REPO/swarmsentinel-env (run deploy/install.sh first)"
 

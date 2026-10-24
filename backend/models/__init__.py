@@ -1,5 +1,5 @@
 from flask_sqlalchemy import SQLAlchemy
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 db = SQLAlchemy()
 
@@ -117,6 +117,30 @@ class Agent(db.Model):
     # only writer today, but this isn't agent-specific by design.
     provider_health = db.Column(db.Text, nullable=True)
 
+    # An agent that has not checked in for this long is shown as offline, whatever status it last stored. Agents report every
+    # 30 seconds or so, and a machine that was removed or switched off never sends a final "I am stopping" message.
+    STALE_AFTER_MINUTES = 15
+
+    @classmethod
+    def _fresh_cutoff(cls):
+        import os
+        minutes = float(os.environ.get('SSAI_AGENT_STALE_MINUTES', cls.STALE_AFTER_MINUTES))
+        return datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(minutes=minutes)
+
+    @classmethod
+    def active_count(cls):
+        """How many agents are active AND have checked in recently (the dashboard's agent count)."""
+        return cls.query.filter(cls.status == 'active', cls.last_seen >= cls._fresh_cutoff()).count()
+
+    def shown_status(self):
+        """The stored status, except that a silent 'active' agent is reported as 'offline'."""
+        seen = self.last_seen
+        if self.status == 'active' and seen is not None:
+            seen = seen.replace(tzinfo=None) if seen.tzinfo is None else seen.astimezone(timezone.utc).replace(tzinfo=None)
+            if seen < self._fresh_cutoff():
+                return 'offline'
+        return self.status
+
     def to_dict(self):
         """The agent as a JSON-ready dict. provider_health is stored as JSON text and decoded here; text that cannot be
         decoded becomes None."""
@@ -133,7 +157,7 @@ class Agent(db.Model):
             'description':     self.description or '',
             'hostname':        self.hostname or '',
             'platform':        self.platform or '',
-            'status':          self.status,
+            'status':          self.shown_status(),
             'last_seen':       _utc_iso(self.last_seen),
             'tasks_completed': self.tasks_completed,
             'scan_count':      self.scans_count or 0,

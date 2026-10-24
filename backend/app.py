@@ -266,7 +266,7 @@ def get_stats():
         "total_nodes":   Node.query.count(),
         "active_nodes":  Node.query.filter_by(status="active").count(),
         "total_agents":  Agent.query.filter(Agent.status != "disabled").count(),
-        "active_agents": Agent.query.filter_by(status="active").count(),
+        "active_agents": Agent.active_count(),
         "total_threats": Threat.query.count(),
         "status":        "operational",
     })

@@ -123,6 +123,34 @@ def report_hash(findings: List[Tuple[str, int, str]]) -> str:
     return hashlib.sha256("\n".join(f"{p}:{n}:{k}" for p, n, k in sorted(findings)).encode()).hexdigest()[:16]
 
 
+def keep_executable_bits(files: List[str], out: str, env: dict) -> None:
+    """Copying files on Windows loses the 'executable' mark, and a script that is not marked fails with 'Permission denied'
+    on Linux (found when the first release was installed, 2026-10-24). Read the marks from the source repository and
+    apply them to the new one."""
+    listing = subprocess.run(["git", "ls-files", "-s", "-z"], cwd=REPO, capture_output=True, check=True).stdout.decode("utf-8")
+    wanted = set(files)
+    for entry in listing.split("\0"):
+        mode, _, rest = entry.partition(" ")
+        path = rest.split("\t", 1)[-1]
+        if mode == "100755" and path in wanted:
+            subprocess.run(["git", "update-index", "--chmod=+x", "--", path], cwd=out, env=env, check=True)
+
+
+def prepare_existing_clone(out: str, env: dict) -> str:
+    """For --onto: make sure OUT is a clean git clone, then empty its working files (keeping .git) so the export replaces them.
+    Returns a reason to refuse, or an empty string."""
+    if not os.path.isdir(os.path.join(out, ".git")):
+        return f"{out} is not a git clone of the public repository"
+    dirty = subprocess.run(["git", "status", "--porcelain"], cwd=out, capture_output=True, text=True, check=True).stdout.strip()
+    if dirty:
+        return f"{out} has uncommitted changes; commit or discard them first"
+    subprocess.run(["git", "rm", "-rq", "--ignore-unmatch", "."], cwd=out, env=env, check=True)
+    for name in os.listdir(out):
+        if name != ".git":
+            shutil.rmtree(os.path.join(out, name), ignore_errors=True)
+    return ""
+
+
 def main(argv=None) -> int:
     """Build a clean, one-commit copy of the repository for publishing, after scanning it for private data.
     Without --write it only reports; with findings it refuses unless you pass the hash of the report you reviewed. Returns 0 ok, 1 findings/refused, 2 bad --out folder.
@@ -133,6 +161,9 @@ def main(argv=None) -> int:
     ap.add_argument("--name", action="append", default=[], help="a machine, user or domain name that must not appear (repeatable)")
     ap.add_argument("--accept-report-hash", help="the hash of a findings report you reviewed and accept")
     ap.add_argument("--message", default="SwarmSentinel public release", help="the single commit message")
+    ap.add_argument("--onto", action="store_true",
+                    help="--out is an existing, clean clone of the public repository: replace its files with this export and add ONE "
+                         "new commit on top (every export after the first)")
     args = ap.parse_args(argv)
 
     out = os.path.abspath(args.out)
@@ -157,7 +188,14 @@ def main(argv=None) -> int:
     if findings and args.accept_report_hash != digest:
         print("refusing to write: fix the findings, or review the list and re-run with --accept-report-hash " + digest)
         return 1
-    if os.path.exists(out) and os.listdir(out):
+    env = dict(os.environ, GIT_AUTHOR_NAME="SwarmSentinel", GIT_AUTHOR_EMAIL="noreply@users.noreply.github.com",
+               GIT_COMMITTER_NAME="SwarmSentinel", GIT_COMMITTER_EMAIL="noreply@users.noreply.github.com")
+    if args.onto:
+        problem = prepare_existing_clone(out, env)
+        if problem:
+            print("refusing: " + problem)
+            return 2
+    elif os.path.exists(out) and os.listdir(out):
         print(f"refusing: {out} already has files in it")
         return 2
     os.makedirs(out, exist_ok=True)
@@ -165,10 +203,13 @@ def main(argv=None) -> int:
         dest = os.path.join(out, rel)
         os.makedirs(os.path.dirname(dest), exist_ok=True)
         shutil.copy2(os.path.join(REPO, rel), dest)
-    env = dict(os.environ, GIT_AUTHOR_NAME="SwarmSentinel", GIT_AUTHOR_EMAIL="noreply@users.noreply.github.com",
-               GIT_COMMITTER_NAME="SwarmSentinel", GIT_COMMITTER_EMAIL="noreply@users.noreply.github.com")
-    for cmd in (["git", "init", "-q", "-b", "main"], ["git", "add", "-A"], ["git", "commit", "-q", "-m", args.message]):
+    for cmd in ([] if args.onto else [["git", "init", "-q", "-b", "main"]]) + [["git", "add", "-A"]]:
         subprocess.run(cmd, cwd=out, env=env, check=True)
+    keep_executable_bits(files, out, env)
+    subprocess.run(["git", "commit", "-q", "-m", args.message], cwd=out, env=env, check=True)
+    if args.onto:
+        print(f"added ONE new commit on top of {out}. Review it, then publish by hand:  cd " + out + "  &&  git push")
+        return 0
     print(f"built {out} with ONE commit and no history from the source repository. Review it, then publish by hand:")
     print("   cd " + out + "  &&  git remote add origin <the new empty repository's URL>  &&  git push -u origin main")
     return 0

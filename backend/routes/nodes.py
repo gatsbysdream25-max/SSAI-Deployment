@@ -145,9 +145,11 @@ def delete_node(node_id):
     if not _auth.is_admin():
         return jsonify({"error": "Unauthorized"}), 401
     node = Node.query.filter_by(node_id=node_id).first_or_404()
+    # The machine's agents are named <agent>@<node id>. Deleting only the machine left them on the dashboard as "active".
+    removed = Agent.query.filter(Agent.name.endswith("@" + node_id, autoescape=True)).delete(synchronize_session=False)
     db.session.delete(node)
     db.session.commit()
-    remediation.audit(_audit_path(), action="delete-node", ok=True, node=node_id, by=_auth.client_ip())
+    remediation.audit(_audit_path(), action="delete-node", ok=True, node=node_id, agents_removed=removed, by=_auth.client_ip())
     return jsonify({"ok": True})
 
 
