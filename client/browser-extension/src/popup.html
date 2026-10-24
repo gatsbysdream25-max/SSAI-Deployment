@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SwarmSentinel Shield</title>
+<style>
+  :root { color-scheme: light dark; --bg: #ffffff; --fg: #1a1d21; --muted: #5b6470; --line: #d5d9de; --accent: #0b6bcb; --bad: #b3261e; }
+  @media (prefers-color-scheme: dark) { :root { --bg: #1b1e22; --fg: #e8eaed; --muted: #a3acb8; --line: #3a4048; --accent: #6cb2ff; --bad: #ff8a80; } }
+  body { margin: 0; padding: 14px; width: 320px; background: var(--bg); color: var(--fg); font: 13px/1.45 system-ui, sans-serif; }
+  h1 { font-size: 15px; margin: 0 0 8px; }
+  p, label, small { color: var(--muted); }
+  .row { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: 10px 0; color: var(--fg); }
+  input[type=text], input[type=url] { width: 100%; box-sizing: border-box; padding: 6px 8px; margin: 4px 0 8px; border: 1px solid var(--line); border-radius: 6px; background: transparent; color: var(--fg); }
+  button { padding: 6px 12px; border: 1px solid var(--line); border-radius: 6px; background: transparent; color: var(--fg); cursor: pointer; }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  #msg { min-height: 1.4em; margin-top: 8px; }
+  #msg.bad { color: var(--bad); }
+  hr { border: 0; border-top: 1px solid var(--line); margin: 12px 0; }
+</style>
+</head>
+<body>
+<h1>SwarmSentinel Shield</h1>
+<p id="state">Loading...</p>
+
+<div class="row"><label for="on"><b>Scan my Gmail for phishing</b></label><input id="on" type="checkbox" disabled></div>
+<small>Off by default. When on, it checks the message you have open and tells your SwarmSentinel hub only the warning signs and the
+host name of a suspicious link. It never sends the subject, sender, recipient or text of your mail.</small>
+<hr>
+<div id="enrol">
+  <label for="hub">Your hub's address</label>
+  <input id="hub" type="url" placeholder="https://hub.example.org">
+  <label for="code">Enrolment code from your administrator</label>
+  <input id="code" type="text" autocomplete="off" placeholder="XXXX-XXXX">
+  <div class="row"><label for="plain">My hub is on my own network and not using HTTPS</label><input id="plain" type="checkbox"></div>
+  <button id="enrolBtn" class="primary">Connect</button>
+</div>
+<div id="connected" hidden>
+  <p>Connected as <b id="node"></b> (credential <code id="key"></code>). Reports sent: <span id="sent">0</span>.</p>
+  <button id="disconnectBtn">Disconnect and forget</button>
+</div>
+<div id="msg" role="status"></div>
+<script src="popup.js"></script>
+</body>
+</html>

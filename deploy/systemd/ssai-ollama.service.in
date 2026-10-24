@@ -1,0 +1,20 @@
+# Template: deploy/install.sh fills in @DIR@, @USER@, @PORT@ and @BIND@. Do not install or edit this file by hand.
+[Unit]
+Description=SwarmSentinel local AI models (Ollama, reachable from this machine only)
+After=network.target
+
+[Service]
+User=@USER@
+# Everything lives under the install folder, so removing the folder removes the models and nothing is left behind.
+Environment=HOME=@DIR@/ai
+Environment=OLLAMA_HOST=127.0.0.1:11434
+Environment=OLLAMA_MODELS=@DIR@/ai/models
+# One model in memory at a time and freed after 5 idle minutes: a small machine can run a panel of several models in turn.
+Environment=OLLAMA_MAX_LOADED_MODELS=1
+Environment=OLLAMA_KEEP_ALIVE=5m
+ExecStart=@DIR@/ai/bin/ollama serve
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

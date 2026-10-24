@@ -1,0 +1,118 @@
+{
+  "_help": [
+    "Every AI model choice lives here. To upgrade a model, change its \"model\" line.",
+    "This installation's own changes go in instance/ai_models.json (same shape; only the fields you change; it survives updates).",
+    "kind: openai (any OpenAI-compatible API) | ollama | anthropic | gemini | huggingface.",
+    "key_env names the environment variable (.env) holding the API key; keys never go in this file.",
+    "model_env / endpoint_env: optional environment variables that override model / endpoint (kept so old .env files keep working).",
+    "default_on: part of the consensus panel as soon as it is usable. Providers not yet measured with tools/ai_benchmark.py stay off.",
+    "Add a local voice: copy an ollama entry, change its id and model, then run `ollama pull <model>` on the machine at \"endpoint\"."
+  ],
+  "providers": {
+    "groq": {
+      "kind": "openai", "model": "openai/gpt-oss-20b", "endpoint": "https://api.groq.com/openai/v1",
+      "key_env": "GROQ_API_KEY", "model_env": "GROQ_MODEL",
+      "tier": "free", "verified": true, "default_on": true,
+      "notes": "Measured 2026-09-19: best accuracy of everything tested, ~0.5s per answer, free tier."
+    },
+    "ollama": {
+      "kind": "ollama", "model": "llama3", "endpoint": "http://localhost:11434",
+      "model_env": "OLLAMA_MODEL", "endpoint_env": "OLLAMA_URL",
+      "tier": "local", "verified": true, "default_on": false,
+      "notes": "Auto-discovers an Ollama server and uses its first model. Prefer the named local voices below."
+    },
+    "ollama-mistral": {
+      "kind": "ollama", "model": "mistral", "endpoint": "http://localhost:11434",
+      "name": "Mistral 7B (local)", "specialty": "Local Threat Intel", "icon": "🏠",
+      "tier": "local", "verified": true, "default_on": false,
+      "notes": "4.4GB. Measured 2026-09-19: hedges on nearly everything (strict recall 20%). Keep off until weighted or replaced by a better local model."
+    },
+    "ollama-hermes3": {
+      "kind": "ollama", "model": "hermes3", "endpoint": "http://localhost:11434",
+      "name": "Hermes 3 8B (local)", "specialty": "Local Threat Intel", "icon": "🏠",
+      "tier": "local", "verified": false, "default_on": false,
+      "notes": "Lighter machines (4.7GB). Measured 80% accuracy / 30% false positives, 40s per answer on CPU."
+    },
+    "ollama-phi4": {
+      "kind": "ollama", "model": "phi4:14b", "endpoint": "http://localhost:11434",
+      "name": "Phi-4 14B (local)", "specialty": "Local Threat Intel", "icon": "🏠",
+      "tier": "local", "verified": false, "default_on": false,
+      "notes": "About 9GB download. Not benchmarked yet: run tools/ai_benchmark.py before turning it on."
+    },
+    "ollama-gemma4": {
+      "kind": "ollama", "model": "gemma4:12b", "endpoint": "http://localhost:11434",
+      "name": "Gemma 4 12B (local)", "specialty": "Local Threat Intel", "icon": "🏠",
+      "tier": "local", "verified": false, "default_on": false,
+      "notes": "About 7.6GB download. Not benchmarked yet: run tools/ai_benchmark.py before turning it on."
+    },
+    "openrouter": {
+      "kind": "openai", "model": "qwen/qwen3.8-27b", "endpoint": "https://openrouter.ai/api/v1",
+      "key_env": "OPENROUTER_API_KEY", "model_env": "OPENROUTER_MODEL",
+      "tier": "credits", "verified": false, "default_on": false,
+      "notes": "OFF on purpose (2026-10-21). The free slug qwen/qwen3.8-27b:free returns 404; the paid slug (this one) needs credits. Free models rotate and cap at about 50 requests a day. Never benchmarked, so by the plan it gets no vote: run backend/tools/ai_benchmark.py before turning it on."
+    },
+    "cerebras": {
+      "kind": "openai", "model": "llama3.1-8b", "endpoint": "https://api.cerebras.ai/v1",
+      "key_env": "CEREBRAS_API_KEY", "model_env": "CEREBRAS_MODEL",
+      "tier": "free", "verified": false, "default_on": false,
+      "notes": "Free tier. Not benchmarked yet: run backend/tools/ai_benchmark.py before enabling."
+    },
+    "mistral": {
+      "kind": "openai", "model": "mistral-small-latest", "endpoint": "https://api.mistral.ai/v1",
+      "key_env": "MISTRAL_API_KEY", "model_env": "MISTRAL_MODEL",
+      "tier": "free", "verified": false, "default_on": false,
+      "notes": "Free experimentation tier. Not benchmarked yet: run backend/tools/ai_benchmark.py before enabling."
+    },
+    "gemini": {
+      "kind": "gemini", "model": "gemini-3.6-flash", "endpoint": "https://generativelanguage.googleapis.com/v1beta/openai",
+      "key_env": "GEMINI_API_KEY", "model_env": "GEMINI_MODEL",
+      "tier": "limited", "verified": true, "default_on": false, "cost": "Free (small quota)",
+      "rate_limit": "Small free-tier quota (HTTP 429 seen 2026-09-19)",
+      "notes": "Answers well within its quota, but the free quota runs out quickly. Enable if you have a paid plan."
+    },
+    "huggingface": {
+      "kind": "huggingface", "model": "meta-llama/Llama-3.1-8B-Instruct", "endpoint": "https://router.huggingface.co/v1",
+      "key_env": "HF_TOKEN", "model_env": "HF_MODEL",
+      "tier": "limited", "verified": true, "default_on": false, "cost": "Credits",
+      "rate_limit": "Monthly credits (free allowance is small)",
+      "notes": "No longer free: the Inference Providers router needs credits (HTTP 402 since 2026-09-19). Replace it with a free provider."
+    },
+    "together": {
+      "kind": "openai", "model": "meta-llama/Meta-Llama-3.1-8B-Instruct-Turbo", "endpoint": "https://api.together.xyz/v1",
+      "key_env": "TOGETHER_API_KEY", "model_env": "TOGETHER_MODEL",
+      "tier": "credits", "verified": false, "default_on": false,
+      "notes": "Prepaid credits. Not benchmarked yet."
+    },
+    "anthropic": {
+      "kind": "anthropic", "model": "claude-haiku-4-5-20251001", "endpoint": "https://api.anthropic.com/v1",
+      "key_env": "ANTHROPIC_API_KEY", "model_env": "ANTHROPIC_MODEL",
+      "tier": "paid", "verified": false, "default_on": false,
+      "notes": "Pay-per-use API, funded separately from a Claude.ai subscription (console.anthropic.com). Not benchmarked yet."
+    },
+    "openai": {
+      "kind": "openai", "model": "gpt-4.1-mini", "endpoint": "https://api.openai.com/v1",
+      "key_env": "OPENAI_API_KEY", "key_ref": "ssai/openai", "model_env": "OPENAI_MODEL",
+      "name": "ChatGPT (OpenAI)", "specialty": "General Threat Analysis", "icon": "💬",
+      "tier": "paid", "verified": false, "default_on": false,
+      "daily_request_cap": 500, "monthly_spend_cap_usd": 5, "price_in_per_mtok": 0.4, "price_out_per_mtok": 1.6,
+      "notes": "OFF until a key is added and it passes the ablation test (tools/ablation.py). A ChatGPT plan does not include API access. Check the model name and prices against OpenAI's docs before enabling; the prices here are estimates used only for the spend cap."
+    },
+    "grok": {
+      "kind": "openai", "model": "grok-beta", "endpoint": "https://api.x.ai/v1",
+      "key_env": "GROK_API_KEY", "key_ref": "ssai/xai", "model_env": "GROK_MODEL",
+      "name": "Grok (xAI)", "specialty": "General Threat Analysis", "icon": "🅧",
+      "tier": "paid", "verified": false, "default_on": false,
+      "daily_request_cap": 500, "monthly_spend_cap_usd": 5, "price_in_per_mtok": 2.0, "price_out_per_mtok": 10.0,
+      "notes": "OFF until a key is added and it passes the ablation test. Pay as you go, no free tier. This is xAI's Grok, not Groq (a different company). The model name is a placeholder: set GROK_MODEL or edit it after checking xAI's docs."
+    },
+    "kimi": {
+      "kind": "openai", "model": "kimi-k2.6", "endpoint": "https://api.moonshot.ai/v1",
+      "key_env": "KIMI_API_KEY", "key_ref": "ssai/moonshot", "model_env": "KIMI_MODEL",
+      "name": "Kimi (Moonshot AI)", "specialty": "Long-context Analysis", "icon": "🌙",
+      "tier": "paid", "verified": false, "default_on": false,
+      "allowed_deployments": ["home", "lab", "college"],
+      "daily_request_cap": 500, "monthly_spend_cap_usd": 5, "price_in_per_mtok": 0.43, "price_out_per_mtok": 1.82,
+      "notes": "OFF until a key is added and it passes the ablation test. Cheapest paid voice (about $2 to $5 a month at 1,000 findings). Made by Moonshot AI (Beijing): not allowed in a bank deployment until that bank approves it (allowed_deployments). Check the model name against Moonshot's docs."
+    }
+  }
+}

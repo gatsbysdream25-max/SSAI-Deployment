@@ -1,0 +1,58 @@
+venv/
+.venv/
+__pycache__/
+*.pyc
+*.log
+logs/
+.pm2/
+.env
+swarmsentinel-env/
+*.db
+instance/
+
+# ── Personal / sensitive — never commit ──
+session_resume.md
+Threat Log
+security/reports/
+security/scans/
+*.ps1
+*.sh
+!docker/docker-entrypoint.sh
+!docker/run-github-reporter.sh
+!deploy/*.sh
+!deploy/kit/*.sh
+deploy/rendered/
+.update.lock
+network_scanner_output*
+nmap_*
+*.scan
+
+# ── Env / secrets ──
+.env*
+!.env.example
+*.key
+*.pem
+*.secret
+
+# ── OS / editor noise ──
+*~
+*.swp
+.DS_Store
+Thumbs.db
+archive
+
+# Built extension packages now embed a live SSAI_API_KEY at build time —
+# never commit these (added 2026-08-20, see commit removing them from tracking)
+client/*/*.zip
+
+# ── Local editing leftovers ──
+*.bak
+*.bak-*
+*~
+.claude/
+
+# built browser-extension packages (rebuild with client/browser-extension/build.py)
+client/browser-extension/dist/
+/ai/
+_archive/
+!deploy/install-windows.ps1

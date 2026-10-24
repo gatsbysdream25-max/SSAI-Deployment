@@ -1,0 +1,2306 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>SwarmSentinel — Unified Command Center</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@500;700;800&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --bg: #0a0c10;
+      --surface: #111520;
+      --surface2: #161b27;
+      --surface3: #1c2234;
+      --border: #1e2535;
+      --accent: #00d4ff;
+      --accent2: #7c3aed;
+      --text: #e2e8f0;
+      --text-muted: #64748b;
+      --green: #10b981;
+      --yellow: #f59e0b;
+      --orange: #f97316;
+      --red: #ef4444;
+      --purple: #a855f7;
+      --critical: #dc2626;
+      --scout: #06b6d4;
+      --ai: #f472b6;
+      --gh: #34d399;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: 'Segoe UI', system-ui, sans-serif;
+      font-size: 14px;
+      min-height: 100vh;
+    }
+
+    /* ── Header ── */
+    header {
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+      padding: 0 20px;
+      height: 52px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      position: sticky;
+      top: 0;
+      z-index: 100;
+    }
+    .logo {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      font-weight: 700;
+      font-size: 17px;
+      letter-spacing: 0.5px;
+    }
+    .logo-icon {
+      width: 30px; height: 30px;
+      background: linear-gradient(135deg, var(--accent), var(--accent2));
+      border-radius: 7px;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 16px;
+    }
+    .header-center {
+      display: flex;
+      gap: 14px;
+      align-items: center;
+      font-size: 11px;
+    }
+    .hdr-chip {
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      border-radius: 20px;
+      padding: 3px 10px;
+      display: flex; align-items: center; gap: 5px;
+      font-size: 11px;
+    }
+    .hdr-chip.ai  { border-color: #6b2242; color: var(--ai); }
+    .hdr-chip.gh  { border-color: #064e3b; color: var(--gh); }
+    .header-right { display: flex; align-items: center; gap: 20px; font-size: 12px; color: var(--text-muted); }
+    .dot {
+      display: inline-block;
+      width: 7px; height: 7px; border-radius: 50%;
+      background: var(--text-muted);
+      margin-right: 5px;
+      transition: background 0.3s;
+    }
+    .dot.on   { background: var(--green);  box-shadow: 0 0 5px var(--green); }
+    .dot.warn { background: var(--yellow); box-shadow: 0 0 5px var(--yellow); }
+
+    /* ── Layout ── */
+    .layout { display: grid; grid-template-columns: 280px 1fr; min-height: calc(100vh - 52px); }
+
+    /* ── Sidebar ── */
+    aside {
+      background: var(--surface);
+      border-right: 1px solid var(--border);
+      padding: 16px 14px;
+      display: flex; flex-direction: column; gap: 18px;
+      overflow-y: auto; overflow-x: hidden;
+    }
+    .section-hdr {
+      font-size: 9px; font-weight: 700; letter-spacing: 2px;
+      text-transform: uppercase; color: var(--text-muted);
+      margin-bottom: 8px;
+      display: flex; align-items: center; gap: 6px;
+    }
+    .section-hdr .count-chip {
+      background: var(--surface3);
+      color: var(--accent);
+      border-radius: 10px;
+      padding: 1px 6px;
+      font-size: 10px;
+      font-weight: 700;
+    }
+    .section-hdr .count-chip.ai-chip { color: var(--ai); }
+
+    /* Agent cards — box style */
+    .agent-card {
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 8px 11px;
+      margin-bottom: 5px;
+      display: flex;
+      flex-wrap: wrap;            /* a long name or the stats line wraps instead of running off the sidebar */
+      align-items: center;
+      gap: 4px 6px;
+    }
+    .agent-card:hover { background: var(--surface3); border-color: var(--accent); }
+    .agent-row1 { display: contents; }
+    .agent-name { font-weight: 600; font-size: 11px; min-width: 0; overflow-wrap: anywhere; flex: 0 1 auto; }
+    .agent-badge { font-size: 8px; padding: 2px 6px; border-radius: 8px; font-weight: 700; flex: 0 0 auto; }
+    .badge-running  { background: #052a14; color: var(--green); }
+    .badge-scanning { background: #052533; color: var(--accent); }
+    .badge-idle     { background: #1e2535; color: var(--text-muted); }
+    .badge-error    { background: #3b0606; color: var(--red); }
+    .badge-stopped  { background: #1e2535; color: #475569; }
+    .agent-desc  { display: none; }
+    /* On/off switch on an agent card (signed-in admins only) */
+    .agent-toggle { margin-left: 6px; border: 1px solid var(--border); border-radius: 10px; padding: 1px 8px; font-size: 8px; font-weight: 700; cursor: pointer; flex: 0 0 auto; background: var(--surface3); color: var(--text-muted); }
+    .agent-toggle.on  { background: #052a14; color: var(--green); border-color: #0b5a2b; }
+    .agent-toggle.off { background: #1e2535; color: var(--text-muted); }
+    .agent-toggle:hover { border-color: var(--accent); }
+    .kiosk .agent-toggle, .readonly .agent-toggle { display: none !important; }
+    .agent-stats { font-size: 9px; color: var(--text-muted); order: 2; flex: 1 1 100%; }          /* its own line under the name */
+    .agent-card .agent-toggle { order: 1; margin-left: auto; }                                     /* switch stays at the right of the first line */
+    .agent-err { order: 3; flex: 1 1 100%; color: var(--red); font-size: 9px; overflow-wrap: anywhere; }
+
+    /* Node cards */
+    .node-card { background: var(--surface2); border: 1px solid var(--border); border-radius: 8px; padding: 9px 11px; margin-bottom: 6px; }
+    .node-row1 { display: flex; align-items: center; gap: 6px; margin-bottom: 3px; }
+    .node-name { font-weight: 600; font-size: 12px; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .node-platform { font-size: 9px; color: var(--text-muted); background: var(--surface3); padding: 1px 5px; border-radius: 4px; }
+    .node-meta { font-size: 10px; color: var(--text-muted); }
+    .node-active { color: var(--green); } .node-idle { color: var(--text-muted); }
+
+    /* AI Swarm mini card */
+    .ai-mini {
+      background: var(--surface2);
+      border: 1px solid #3d1a30;
+      border-radius: 8px;
+      padding: 10px 11px;
+    }
+    .ai-row { display: flex; justify-content: space-between; font-size: 11px; margin-bottom: 4px; }
+    .ai-val { font-weight: 600; color: var(--ai); }
+    .ai-model-list { margin-top: 6px; display: flex; flex-direction: column; gap: 3px; }
+    .ai-model-row {
+      display: flex; align-items: center; justify-content: space-between;
+      font-size: 10px;
+      background: #1a0d15;
+      border-radius: 4px;
+      padding: 3px 7px;
+    }
+    .ai-model-name { color: var(--ai); font-weight: 600; }
+    .ai-model-count { color: var(--text-muted); }
+    .ai-model-dot { width: 5px; height: 5px; border-radius: 50%; background: var(--ai); box-shadow: 0 0 4px var(--ai); margin-right: 5px; }
+
+    /* Defender mini card */
+    .def-mini { background: var(--surface2); border: 1px solid var(--border); border-radius: 8px; padding: 10px 11px; }
+    .def-row { display: flex; justify-content: space-between; font-size: 11px; margin-bottom: 3px; }
+    .def-val { font-weight: 600; }
+    .on { color: var(--green); } .off { color: var(--red); }
+
+    /* ── Main content ── */
+    .content { padding: 18px; display: flex; flex-direction: column; gap: 16px; overflow: hidden; }
+
+    /* Summary bar */
+    .summary-bar { display: grid; grid-template-columns: repeat(9, 1fr); gap: 10px; }
+    .sum-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 12px;
+      text-align: center;
+    }
+    .sum-num { font-size: 26px; font-weight: 800; }
+    .sum-label { font-size: 9px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 1px; margin-top: 2px; }
+    .num-crit { color: var(--critical); }
+    .num-high { color: var(--orange); }
+    .num-med  { color: var(--yellow); }
+    .num-low  { color: var(--accent); }
+    .num-info { color: var(--text-muted); }
+    .num-ai   { color: var(--ai); }
+
+    /* Alert banner */
+    #alert-banner {
+      display: none;
+      background: linear-gradient(90deg, #3b0606, #1a0a0a);
+      border: 1px solid var(--critical);
+      border-radius: 8px;
+      padding: 10px 16px;
+      animation: pulse-border 1s infinite alternate;
+    }
+    @keyframes pulse-border {
+      from { border-color: var(--critical); }
+      to   { border-color: #7f1d1d; }
+    }
+    .alert-title  { font-weight: 700; color: var(--critical); }
+    .alert-detail { font-size: 12px; color: #fca5a5; margin-top: 2px; }
+
+    /* Panels */
+    .panel { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; overflow: hidden; }
+    .panel-hdr {
+      padding: 10px 14px;
+      border-bottom: 1px solid var(--border);
+      display: flex; align-items: center; justify-content: space-between;
+      font-weight: 600; font-size: 13px;
+    }
+    .panel-title { display: flex; align-items: center; gap: 8px; }
+    .badge-count        { background: var(--accent2); color: #fff; font-size: 10px; padding: 1px 7px; border-radius: 10px; font-weight: 700; }
+    .badge-scout        { background: #075168; color: var(--scout); }
+    .badge-collective   { background: #2d1b69; color: var(--purple); }
+    .badge-ai           { background: #3d0a24; color: var(--ai); }
+    .badge-gh           { background: #0a2e1f; color: var(--gh); }
+
+    table { width: 100%; border-collapse: collapse; }
+    th { background: var(--surface2); padding: 7px 11px; text-align: left; font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; color: var(--text-muted); border-bottom: 1px solid var(--border); }
+    td { padding: 8px 11px; border-bottom: 1px solid var(--border); vertical-align: middle; font-size: 12px; }
+    tr:last-child td { border-bottom: none; }
+    tr.new-row { animation: slide-in 0.35s ease; }
+    @keyframes slide-in {
+      from { opacity: 0; transform: translateY(-6px); background: #1a2035; }
+      to   { opacity: 1; transform: translateY(0); }
+    }
+
+    .gear-menu { position: relative; }
+    .signin-link { color: var(--accent, #00ff88); font-size: 12px; font-weight: 700; text-decoration: none; border: 1px solid var(--accent, #00ff88); border-radius: 6px; padding: 5px 10px; }
+    .signin-link:hover { filter: brightness(1.15); }
+    .gear-btn { background: transparent; border: 1px solid var(--border, #1e2d40); color: var(--text-muted, #5a7080); border-radius: 4px; width: 26px; height: 26px; font-size: 14px; cursor: pointer; }
+    .gear-btn:hover { color: var(--accent, #00d4ff); border-color: var(--accent, #00d4ff); }
+    .gear-dropdown { display: none; position: absolute; right: 0; top: 32px; background: #111927; border: 1px solid var(--border, #1e2d40); border-radius: 6px; min-width: 200px; box-shadow: 0 8px 24px rgba(0,0,0,.5); z-index: 100; overflow: hidden; }
+    .gear-dropdown.open { display: block; }
+    .gear-dropdown a { display: block; padding: 10px 14px; color: var(--text, #c8d8e8); text-decoration: none; font-size: 12px; border-bottom: 1px solid var(--border, #1e2d40); }
+    .gear-dropdown a:last-child { border-bottom: none; }
+    .gear-dropdown a:hover { background: #1a2332; }
+    .gear-dropdown a.disabled { color: var(--text-muted, #5a7080); cursor: default; }
+    .gear-dropdown a.disabled:hover { background: transparent; }
+    .threat-actions { display: flex; gap: 4px; }
+    .action-btn { border: 1px solid #333; background: #1a1a1a; color: #ccc; border-radius: 4px; width: 22px; height: 22px; font-size: 11px; cursor: pointer; line-height: 1; }
+    .action-btn:hover { filter: brightness(1.4); }
+    .action-resolve:hover { border-color: #22c55e; color: #22c55e; }
+    .action-dismiss:hover { border-color: #94a3b8; color: #94a3b8; }
+    .action-block:hover { border-color: #ef4444; color: #ef4444; }
+    .action-allow:hover { border-color: #f59e0b; color: #f59e0b; }
+    .sev-pill { display: inline-block; padding: 1px 7px; border-radius: 20px; font-size: 9px; font-weight: 800; text-transform: uppercase; }
+    .sev-CRITICAL { background: #3b0606; color: #f87171; border: 1px solid #991b1b; }
+    .sev-HIGH     { background: #2d1500; color: #fb923c; border: 1px solid #9a3412; }
+    .sev-MEDIUM   { background: #2d2200; color: #fbbf24; border: 1px solid #92400e; }
+    .sev-LOW      { background: #001a2d; color: #38bdf8; border: 1px solid #0369a1; }
+    .sev-INFO     { background: #1e2535; color: #94a3b8; border: 1px solid #334155; }
+
+    .ai-verdict-pill {
+      display: inline-block;
+      padding: 1px 5px; border-radius: 10px; font-size: 9px; font-weight: 700;
+      cursor: help;
+    }
+    #ssai-tip {
+      position: fixed; z-index: 9999; display: none; max-width: min(380px, calc(100vw - 24px));
+      background: #0b1220; color: #e2e8f0; border: 1px solid var(--border); border-radius: 8px;
+      padding: 8px 10px; font-size: 11px; line-height: 1.45; white-space: pre-wrap; word-break: break-word;
+      box-shadow: 0 6px 24px rgba(0,0,0,.5); pointer-events: none;
+    }
+    .av-malicious  { background: #3b0616; color: #f9a8d4; border: 1px solid #881337; }
+    .av-suspicious { background: #2d1d00; color: #fcd34d; border: 1px solid #92400e; }
+    .av-benign     { background: #052a14; color: #6ee7b7; border: 1px solid #065f46; }
+
+    .agent-tag   { font-size: 9px; padding: 1px 5px; border-radius: 4px; background: #1e2535; color: var(--text-muted); font-weight: 700; }
+    .tag-scout   { background: #042d38; color: var(--scout); }
+    .tag-collective { background: #1e1040; color: var(--purple); }
+    .av-badge    { font-size: 9px; padding: 1px 4px; border-radius: 3px; background: #052533; color: var(--accent); font-weight: 700; margin-left: 3px; }
+    .occur-badge { font-size: 9px; padding: 1px 5px; border-radius: 10px; background: #2a1a05; color: #ffb74d; font-weight: 700; margin-left: 5px; }
+    .src-text    { color: var(--text-muted); font-size: 11px; max-width: 160px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .time-text   { color: var(--text-muted); font-size: 10px; white-space: nowrap; }
+
+    .tbl-scroll { max-height: 400px; overflow-y: auto; }
+    .tbl-scroll::-webkit-scrollbar { width: 4px; }
+    .tbl-scroll::-webkit-scrollbar-thumb { background: var(--border); border-radius: 4px; }
+
+    .filter-bar { display: flex; gap: 6px; }
+    .flt-btn {
+      background: var(--surface2); border: 1px solid var(--border);
+      color: var(--text-muted); padding: 3px 10px;
+      border-radius: 20px; font-size: 10px; cursor: pointer;
+      transition: all 0.15s;
+    }
+    .flt-btn:hover, .flt-btn.active { border-color: var(--accent); color: var(--accent); }
+    .flt-btn.active { background: #051a20; }
+
+    /* Collective intel panel */
+    .intel-item { padding: 7px 14px; border-bottom: 1px solid var(--border); display: flex; gap: 10px; align-items: baseline; }
+    .intel-item:last-child { border-bottom: none; }
+    .intel-src  { color: var(--text-muted); flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; }
+    .intel-type { font-size: 10px; font-weight: 700; color: var(--purple); min-width: 80px; }
+    .intel-by   { font-size: 10px; color: #475569; }
+
+    /* GitHub threat DB panel */
+    .gh-stats { padding: 10px 14px; display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 8px; border-bottom: 1px solid var(--border); }
+    .gh-stat { text-align: center; }
+    .gh-num  { font-size: 20px; font-weight: 800; color: var(--gh); }
+    .gh-lbl  { font-size: 9px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 1px; }
+    .gh-recent { max-height: 120px; overflow-y: auto; word-break: break-word; }
+    #collective-panel .intel-item { padding: 8px 18px; font-size: 12px; }
+    #collective-panel .intel-by { min-width: 220px; text-align: right; }
+    .gh-item { padding: 5px 14px; border-bottom: 1px solid var(--border); display: flex; gap: 8px; align-items: center; font-size: 11px; }
+    .gh-item:last-child { border-bottom: none; }
+    .gh-sev  { font-size: 9px; font-weight: 700; color: var(--gh); }
+    .gh-title { color: var(--text-muted); flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+    /* Defender event log */
+    #defender-log { max-height: 160px; overflow-y: auto; font-size: 12px; }
+    .def-event { padding: 5px 12px; border-bottom: 1px solid var(--border); display: flex; gap: 10px; align-items: baseline; }
+    .def-event:last-child { border-bottom: none; }
+    .def-name { font-weight: 600; color: #fca5a5; }
+    .def-res  { color: var(--text-muted); flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+    .empty-msg { padding: 24px; text-align: center; color: var(--text-muted); font-size: 12px; }
+
+    /* Panels grid */
+    .panels-3col { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 16px; }
+    .panels-2col { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+
+    /* ═══════════════════════════════════════════════════════════
+       Home view (2026-08-24) — plain-language lens over the same
+       threat feed, for non-technical users. Developer view above
+       is unchanged; this is an additional screen, not a redesign.
+       ═══════════════════════════════════════════════════════════ */
+    :root {
+      --display: 'Manrope', 'Segoe UI', system-ui, sans-serif;
+      --red-bg: #2c1414;
+      --yellow-bg: #2c2007;
+      --green-bg: #0d2620;
+    }
+    .mode-toggle {
+      display: flex; align-items: center; gap: 2px;
+      background: var(--surface2); border: 1px solid var(--border);
+      border-radius: 8px; padding: 2px; margin-right: 4px;
+    }
+    .mode-toggle button {
+      appearance: none; border: none; background: transparent;
+      color: var(--text-muted); font: inherit; font-size: 11.5px; font-weight: 600;
+      padding: 6px 12px; border-radius: 6px; cursor: pointer;
+    }
+    .mode-toggle button.active { background: var(--surface3); color: var(--text); }
+    .mode-toggle button:not(.active):hover { color: var(--text); }
+
+    .screen { display: none; }
+
+    /* ── Home shell: sidebar tabs + main pane, mail-client layout ── */
+    #home-screen { min-height: calc(100vh - 52px); }
+    .home-shell { display: flex; min-height: calc(100vh - 52px); }
+    .home-nav {
+      width: 216px; flex-shrink: 0; background: var(--surface);
+      border-right: 1px solid var(--border); padding: 18px 12px;
+      display: flex; flex-direction: column; gap: 3px;
+    }
+    .home-nav-hdr {
+      font-family: var(--display); font-size: 10px; font-weight: 700; color: var(--text-muted);
+      text-transform: uppercase; letter-spacing: .08em; padding: 4px 10px 10px;
+    }
+    .home-nav-btn {
+      display: flex; align-items: center; gap: 10px; width: 100%;
+      background: transparent; border: none; border-radius: 8px;
+      padding: 9px 10px; font: inherit; font-size: 13px; font-weight: 600;
+      color: var(--text-muted); cursor: pointer; text-align: left;
+      border-left: 3px solid transparent;
+    }
+    .home-nav-btn .icon { font-size: 15px; width: 18px; text-align: center; flex-shrink: 0; }
+    .home-nav-btn .lbl { flex: 1; }
+    .home-nav-btn:hover { background: var(--surface2); color: var(--text); }
+    .home-nav-btn.active {
+      background: var(--surface3); color: var(--text);
+      border-left-color: var(--accent);
+    }
+    .home-nav-badge {
+      background: var(--surface3); color: var(--text-muted);
+      font-size: 10px; font-weight: 700; padding: 1px 7px; border-radius: 10px;
+    }
+    .home-nav-btn.active .home-nav-badge { background: var(--accent); color: #04222a; }
+    .home-nav-badge.attn { background: var(--red); color: #2c0a0a; }
+    .home-nav-divider { height: 1px; background: var(--border); margin: 10px 4px; }
+
+    .home-main { flex: 1; min-width: 0; padding: 24px 30px 60px; overflow-y: auto; max-width: 980px; }
+    .home-tab { display: none; }
+    .home-tab.active { display: block; }
+    .home-tab-hdr { font-family: var(--display); font-weight: 800; font-size: 19px; margin-bottom: 4px; }
+    .home-tab-sub { color: var(--text-muted); font-size: 12.5px; margin-bottom: 20px; }
+
+    /* Overview quick-stat tiles */
+    .home-quickstats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin-bottom: 22px; }
+    .home-qstat {
+      background: var(--surface); border: 1px solid var(--border); border-radius: 12px;
+      padding: 15px 16px; cursor: pointer; text-align: left; font: inherit; color: var(--text);
+      display: flex; flex-direction: column; gap: 3px;
+    }
+    .home-qstat:hover { border-color: var(--accent); background: var(--surface2); }
+    .home-qstat-num { font-family: var(--display); font-size: 26px; font-weight: 800; }
+    .home-qstat-lbl { font-size: 11.5px; color: var(--text-muted); }
+    .home-qstat.attn .home-qstat-num  { color: var(--red); }
+    .home-qstat.review .home-qstat-num { color: var(--yellow); }
+    .home-qstat.ok .home-qstat-num    { color: var(--green); }
+
+    .home-section-row { display: flex; align-items: baseline; justify-content: space-between; margin: 26px 0 12px; }
+    .home-section-row:first-child { margin-top: 0; }
+    .home-see-all { font-size: 12px; font-weight: 600; color: var(--accent); background: none; border: none; cursor: pointer; }
+    .home-see-all:hover { text-decoration: underline; }
+
+    .home-hero { border-radius: 16px; padding: 26px 24px; margin-bottom: 8px; border: 1px solid; }
+    .home-hero.state-attention { background: var(--red-bg); border-color: #5c2323; }
+    .home-hero.state-review    { background: var(--yellow-bg); border-color: #5c4a1a; }
+    .home-hero.state-clear     { background: var(--green-bg); border-color: #1f5c46; }
+    .home-hero-eyebrow {
+      font-family: var(--display); font-weight: 700; font-size: 11px;
+      text-transform: uppercase; letter-spacing: .08em; margin-bottom: 8px;
+    }
+    .home-hero.state-attention .home-hero-eyebrow { color: var(--red); }
+    .home-hero.state-review    .home-hero-eyebrow { color: var(--yellow); }
+    .home-hero.state-clear     .home-hero-eyebrow { color: var(--green); }
+    .home-hero-headline { font-family: var(--display); font-weight: 800; font-size: 24px; line-height: 1.25; margin: 0 0 8px; }
+    .home-hero-sub { color: var(--text-muted); font-size: 13.5px; line-height: 1.55; max-width: 62ch; }
+
+    .home-list-label {
+      font-family: var(--display); font-weight: 700; font-size: 12px; color: var(--text-muted);
+      text-transform: uppercase; letter-spacing: .06em; margin: 0 0 12px 2px;
+    }
+    .home-card-list { display: flex; flex-direction: column; gap: 10px; }
+    .home-tcard {
+      background: var(--surface); border: 1px solid var(--border); border-radius: 12px;
+      padding: 15px 15px 13px; display: flex; gap: 13px; position: relative;
+    }
+    .home-tcard::before { content: ""; position: absolute; left: 0; top: 12px; bottom: 12px; width: 3px; border-radius: 3px; }
+    .home-tcard.lvl-attention::before { background: var(--red); }
+    .home-tcard.lvl-review::before    { background: var(--yellow); }
+    .home-tcard.lvl-fyi::before       { background: var(--text-muted); opacity: .5; }
+    .home-tcard-icon {
+      width: 36px; height: 36px; border-radius: 10px; display: flex; align-items: center; justify-content: center;
+      font-size: 17px; flex-shrink: 0; margin-left: 5px;
+    }
+    .lvl-attention .home-tcard-icon { background: var(--red-bg); }
+    .lvl-review    .home-tcard-icon { background: var(--yellow-bg); }
+    .lvl-fyi       .home-tcard-icon { background: var(--surface2); }
+    .home-tcard-body { flex: 1; min-width: 0; }
+    .home-tcard-top { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }
+    .home-tcard-title { font-family: var(--display); font-weight: 700; font-size: 14.5px; }
+    .home-tcard-when { font-size: 11.5px; color: var(--text-muted); white-space: nowrap; flex-shrink: 0; }
+    .home-tcard-desc { font-size: 13px; color: var(--text-muted); line-height: 1.5; margin: 4px 0 12px; max-width: 58ch; }
+    .home-tcard-ai { font-size: 12px; line-height: 1.5; margin: -4px 0 12px; padding: 6px 10px; border-radius: 8px;
+                     background: var(--surface2); border-left: 3px solid var(--text-muted); max-width: 70ch; }
+    .home-tcard-ai.ai-malicious  { border-left-color: var(--red, #e5484d); }
+    .home-tcard-ai.ai-suspicious { border-left-color: var(--yellow, #f5a623); }
+    .home-tcard-ai.ai-benign     { border-left-color: var(--green, #30a46c); }
+    .home-tcard-ai-act { color: var(--text-muted); margin-top: 2px; }
+    .home-tcard-tech .ai-note { margin: 2px 0 2px 10px; }
+    .home-tcard-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+    .home-btn {
+      font: inherit; font-size: 12px; font-weight: 600; border-radius: 7px; padding: 6px 12px; cursor: pointer;
+      border: 1px solid var(--border); background: var(--surface2); color: var(--text);
+    }
+    .home-btn:hover { background: var(--surface3); }
+    .home-btn.primary { background: var(--accent); border-color: var(--accent); color: #04222a; }
+    .home-btn.primary:hover { filter: brightness(1.06); }
+    .home-btn-text {
+      font: inherit; font-size: 11.5px; font-weight: 600; color: var(--text-muted);
+      background: none; border: none; cursor: pointer; padding: 6px 4px; margin-left: auto;
+    }
+    .home-btn-text:hover { color: var(--text); }
+    .home-tcard-tech {
+      display: none; margin-top: 11px; padding-top: 11px; border-top: 1px dashed var(--border);
+      font-family: ui-monospace, Consolas, monospace; font-size: 11px; color: var(--text-muted); line-height: 1.9;
+    }
+    .home-tcard-tech.open { display: block; }
+    .home-tcard-tech b { color: var(--text); font-weight: 600; }
+    .home-footnote { text-align: center; font-size: 11.5px; color: var(--text-muted); margin-top: 22px; }
+
+    /* Findings toolbar (tab-local filter chips) */
+    .home-filter-bar { display: flex; gap: 6px; margin-bottom: 16px; }
+    .home-filter-bar button {
+      background: var(--surface2); border: 1px solid var(--border); color: var(--text-muted);
+      padding: 5px 12px; border-radius: 20px; font-size: 11px; font-weight: 600; cursor: pointer;
+    }
+    .home-filter-bar button:hover, .home-filter-bar button.active { border-color: var(--accent); color: var(--accent); }
+    .home-filter-bar button.active { background: #051a20; }
+
+    /* AI Assistants tab — per-provider status cards */
+    .home-ai-list { display: flex; flex-direction: column; gap: 10px; }
+    .home-ai-card { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; overflow: hidden; }
+    .home-ai-head {
+      display: flex; align-items: center; gap: 12px; padding: 14px 16px; cursor: pointer; user-select: none;
+    }
+    .home-ai-avatar {
+      width: 38px; height: 38px; border-radius: 10px; background: var(--surface2);
+      display: flex; align-items: center; justify-content: center; font-size: 17px; flex-shrink: 0;
+    }
+    .home-ai-info { flex: 1; min-width: 0; }
+    .home-ai-name { font-family: var(--display); font-weight: 700; font-size: 14px; text-transform: capitalize; }
+    .home-ai-model { font-size: 11.5px; color: var(--text-muted); }
+    .home-ai-status { font-size: 11px; font-weight: 700; display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
+    .home-ai-status .dot { width: 7px; height: 7px; border-radius: 50%; }
+    .home-ai-status.live    { color: var(--green); } .home-ai-status.live .dot    { background: var(--green); box-shadow: 0 0 5px var(--green); }
+    .home-ai-status.idle    { color: var(--text-muted); } .home-ai-status.idle .dot { background: var(--text-muted); }
+    .home-ai-caret { color: var(--text-muted); font-size: 11px; transition: transform .15s; flex-shrink: 0; }
+    .home-ai-card.open .home-ai-caret { transform: rotate(90deg); }
+    .home-ai-body { display: none; padding: 0 16px 15px; border-top: 1px solid var(--border); }
+    .home-ai-card.open .home-ai-body { display: block; }
+    .home-ai-activity { padding-top: 12px; display: flex; flex-direction: column; gap: 7px; }
+    .home-ai-activity-row { display: flex; gap: 8px; font-size: 12px; align-items: baseline; }
+    .home-ai-activity-time { color: var(--text-muted); font-size: 11px; white-space: nowrap; }
+    .home-ai-activity-verdict { font-size: 10px; font-weight: 700; padding: 1px 6px; border-radius: 8px; }
+    .home-ai-empty { color: var(--text-muted); font-size: 12px; padding-top: 12px; }
+
+    /* Devices tab */
+    .home-device-group { margin-bottom: 20px; }
+    .home-device-group-hdr { font-family: var(--display); font-weight: 700; font-size: 12.5px; color: var(--text-muted); margin-bottom: 8px; display: flex; align-items: center; gap: 8px; }
+    .home-device-card {
+      background: var(--surface); border: 1px solid var(--border); border-radius: 10px;
+      padding: 12px 14px; margin-bottom: 8px; display: flex; align-items: center; gap: 12px;
+    }
+    .home-device-icon { font-size: 18px; width: 26px; text-align: center; flex-shrink: 0; }
+    .home-device-info { flex: 1; min-width: 0; }
+    .home-device-name { font-weight: 700; font-size: 13px; }
+    .home-device-desc { font-size: 11.5px; color: var(--text-muted); margin-top: 1px; }
+    .home-device-badge { font-size: 10px; font-weight: 700; padding: 2px 9px; border-radius: 10px; flex-shrink: 0; }
+    .home-device-badge.on  { background: #052a14; color: var(--green); }
+    .home-device-badge.off { background: var(--surface2); color: var(--text-muted); }
+
+    /* Activity tab */
+    .home-activity-item { display: flex; gap: 12px; padding: 11px 0; border-bottom: 1px solid var(--border); }
+    .home-activity-item:last-child { border-bottom: none; }
+    .home-activity-icon { font-size: 15px; width: 24px; text-align: center; flex-shrink: 0; }
+    .home-activity-text { flex: 1; font-size: 13px; }
+    .home-activity-time { font-size: 11px; color: var(--text-muted); white-space: nowrap; }
+
+    /* "Get more from Home view" — surfaces API key setup without hiding it */
+    .home-upsell {
+      background: var(--surface2); border: 1px dashed var(--border); border-radius: 12px;
+      padding: 14px 16px; margin-top: 24px; display: flex; align-items: center; gap: 14px;
+    }
+    .home-upsell-text { flex: 1; font-size: 12.5px; color: var(--text-muted); line-height: 1.5; }
+    .home-upsell-text b { color: var(--text); }
+
+    /* Developer view: prominent API key entry point (was gear-menu only) */
+    .dev-apikey-btn {
+      display: flex; align-items: center; gap: 6px;
+      background: linear-gradient(135deg, var(--accent), var(--accent2)); color: #04121a;
+      border: none; border-radius: 20px; padding: 6px 14px; font: inherit; font-size: 11.5px; font-weight: 700;
+      cursor: pointer; text-decoration: none; white-space: nowrap;
+    }
+    .dev-apikey-btn:hover { filter: brightness(1.08); }
+    /* Read-only display: no settings, API-key entry, threat submission, or row actions */
+    .kiosk .gear-menu, .readonly #screenshot-btn, .readonly .dev-apikey-btn, .readonly .home-upsell, .readonly .action-btn, .readonly .identify-btn { display: none !important; }
+    #identify-modal { position: fixed; inset: 0; background: rgba(0,0,0,.6); z-index: 9999; display: flex; align-items: center; justify-content: center; padding: 16px; }
+    .idn-box { position: relative; background: var(--card, #111a27); color: var(--text, #c8d8e8); border: 1px solid var(--border, #1e2d40); border-radius: 10px; max-width: 640px; width: 100%; max-height: 88vh; overflow: auto; padding: 18px 20px; font-size: 13px; }
+    .idn-box h3 { margin: 0 24px 6px 0; font-size: 16px; word-break: break-all; }
+    .idn-box h4 { margin: 14px 0 4px; font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: var(--text-muted, #7c8da3); }
+    .idn-x { position: absolute; top: 10px; right: 12px; background: none; border: 0; color: inherit; font-size: 16px; cursor: pointer; }
+    .idn-head { margin: 0 0 8px; font-size: 14px; }
+    .idn-box table { width: 100%; border-collapse: collapse; }
+    .idn-box th { text-align: left; font-weight: 600; color: var(--text-muted, #7c8da3); padding: 3px 12px 3px 0; white-space: nowrap; vertical-align: top; width: 1%; }
+    .idn-box td { padding: 3px 0; word-break: break-word; }
+    .idn-note { color: var(--text-muted, #7c8da3); font-size: 12px; }
+    .idn-err { color: #ef4444; }
+    .idn-listed { color: #ef4444; font-weight: 700; }
+    .idn-btn { margin-top: 12px; padding: 6px 12px; border-radius: 6px; border: 1px solid var(--border, #1e2d40); background: transparent; color: inherit; cursor: pointer; }
+  </style>
+</head>
+<body class="{{ 'readonly' if readonly else '' }}{{ ' kiosk' if kiosk else '' }}">
+
+<!-- Header -->
+<header>
+  <div class="logo">
+    <div class="logo-icon">🛡</div>
+    SwarmSentinel
+    <span style="font-size:11px;font-weight:400;color:var(--text-muted);margin-left:4px;">Unified Command Center</span>
+  </div>
+
+  <div class="header-center">
+    <div class="hdr-chip ai">🤖 <span id="hdr-ai-count">0</span> AIs active</div>
+    <div class="hdr-chip gh">⬆ <span id="hdr-gh-count">0</span> threats committed</div>
+  </div>
+
+  <div class="header-right">
+    <span><span class="dot" id="conn-dot"></span><span id="conn-label">Connecting…</span></span>
+    <span><span class="dot" id="cloud-dot"></span><span id="cloud-label">Hub: —</span></span>
+    <span id="clock"></span>
+    <div class="mode-toggle" role="tablist" aria-label="Dashboard mode">
+      <button id="btn-mode-home" role="tab" data-on-click="setMode" data-args='["home"]'>Home view</button>
+      <button id="btn-mode-dev" role="tab" data-on-click="setMode" data-args='["dev"]'>Developer view</button>
+    </div>
+    <button class="gear-btn" id="screenshot-btn" data-on-click="clickElement" data-args='["screenshot-input"]' title="Submit a threat from a screenshot">📷</button>
+    <input type="file" id="screenshot-input" accept="image/png,image/jpeg,image/webp" style="display:none" data-on-change="uploadScreenshot" data-pass="event">
+    {% if show_login %}<a class="signin-link" href="/login?next=/dashboard">Sign in</a>{% endif %}
+    {% if signed_in %}<button class="gear-btn" data-on-click="signOut" title="Sign out">Sign out</button>{% endif %}
+    <div class="gear-menu">
+      <button class="gear-btn" id="gear-btn" data-on-click="toggleGearMenu" data-pass="event" title="Settings">⚙</button>
+      <div class="gear-dropdown" id="gear-dropdown">
+        <a href="/settings">🤖 Agents, AI models &amp; keys</a>
+        <a href="/setup">🔑 API Keys / Providers</a>
+      </div>
+    </div>
+  </div>
+</header>
+
+<script src="/static/ssai-actions.js"></script>
+<script nonce="{{ csp_nonce }}">
+function toggleGearMenu(e) {
+  e.stopImmediatePropagation();      // the page-wide click that closes the menu is registered after the dispatcher, so this stops it
+  document.getElementById('gear-dropdown').classList.toggle('open');
+}
+document.addEventListener('click', () => {
+  document.getElementById('gear-dropdown').classList.remove('open');
+});
+</script>
+
+<!-- ═══════════════════ HOME VIEW (plain-language lens) ═══════════════════ -->
+<div id="home-screen" class="screen">
+  <div class="home-shell">
+
+    <nav class="home-nav">
+      <div class="home-nav-hdr">SwarmSentinel</div>
+      <button class="home-nav-btn active" data-hometab="overview" data-on-click="setHomeTab" data-args='["overview"]'>
+        <span class="icon">🏠</span><span class="lbl">Overview</span>
+      </button>
+      <button class="home-nav-btn" data-hometab="findings" data-on-click="setHomeTab" data-args='["findings"]'>
+        <span class="icon">🔍</span><span class="lbl">Findings</span>
+        <span class="home-nav-badge" id="home-nav-findings-badge">0</span>
+      </button>
+      <button class="home-nav-btn" data-hometab="devices" data-on-click="setHomeTab" data-args='["devices"]'>
+        <span class="icon">🖥</span><span class="lbl">Your Devices</span>
+        <span class="home-nav-badge" id="home-nav-devices-badge">0</span>
+      </button>
+      <button class="home-nav-btn" data-hometab="ai" data-on-click="setHomeTab" data-args='["ai"]'>
+        <span class="icon">🤖</span><span class="lbl">AI Assistants</span>
+        <span class="home-nav-badge" id="home-nav-ai-badge">0</span>
+      </button>
+      <button class="home-nav-btn" data-hometab="activity" data-on-click="setHomeTab" data-args='["activity"]'>
+        <span class="icon">📜</span><span class="lbl">Activity</span>
+      </button>
+      <div class="home-nav-divider"></div>
+      <button class="home-nav-btn" data-on-click="setMode" data-args='["dev"]'>
+        <span class="icon">⚙️</span><span class="lbl">Developer view</span>
+      </button>
+    </nav>
+
+    <main class="home-main">
+
+      <!-- Overview -->
+      <section id="home-tab-overview" class="home-tab active">
+        <div class="home-hero state-clear" id="home-hero">
+          <div class="home-hero-eyebrow" id="home-hero-eyebrow">● All clear</div>
+          <h1 class="home-hero-headline" id="home-hero-headline">No open findings right now</h1>
+          <p class="home-hero-sub" id="home-hero-sub">Your network is being watched around the clock. We'll let you know here if anything needs a look.</p>
+        </div>
+
+        <div class="home-quickstats" id="home-quickstats"></div>
+
+        <div class="home-section-row">
+          <div class="home-list-label" style="margin:0;">Recent findings</div>
+          <button class="home-see-all" data-on-click="setHomeTab" data-args='["findings"]'>See all →</button>
+        </div>
+        <div class="home-card-list" id="home-card-list-preview"></div>
+
+        <div class="home-section-row">
+          <div class="home-list-label" style="margin:0;">AI assistants</div>
+          <button class="home-see-all" data-on-click="setHomeTab" data-args='["ai"]'>See all →</button>
+        </div>
+        <div class="home-ai-list" id="home-ai-list-preview"></div>
+      </section>
+
+      <!-- Findings -->
+      <section id="home-tab-findings" class="home-tab">
+        <div class="home-tab-hdr">Findings</div>
+        <div class="home-tab-sub">Everything SwarmSentinel has noticed that still needs a decision from you.</div>
+        <div class="home-filter-bar" id="home-findings-filter">
+          <button class="active" data-lvl="all" data-on-click="setHomeFindingsFilter" data-args='["all"]'>All</button>
+          <button data-lvl="attention" data-on-click="setHomeFindingsFilter" data-args='["attention"]'>Needs attention</button>
+          <button data-lvl="review" data-on-click="setHomeFindingsFilter" data-args='["review"]'>Worth a look</button>
+          <button data-lvl="fyi" data-on-click="setHomeFindingsFilter" data-args='["fyi"]'>FYI</button>
+        </div>
+        <div class="home-card-list" id="home-card-list"></div>
+      </section>
+
+      <!-- Your Devices -->
+      <section id="home-tab-devices" class="home-tab">
+        <div class="home-tab-hdr">Your Devices</div>
+        <div class="home-tab-sub">Every machine SwarmSentinel is watching, and what's actively checking it.</div>
+        <div id="home-devices-body"></div>
+      </section>
+
+      <!-- AI Assistants -->
+      <section id="home-tab-ai" class="home-tab">
+        <div class="home-tab-hdr">AI Assistants</div>
+        <div class="home-tab-sub">Each AI SwarmSentinel can call on to double-check a finding, and what it's actually been doing.</div>
+        <div class="home-ai-list" id="home-ai-list"></div>
+        <div class="home-upsell">
+          <div class="home-upsell-text">Home view only shows AI providers you've already connected. <b>Add more (or your own API keys)</b> in Developer view to get more opinions on every finding.</div>
+          <a href="/setup" class="dev-apikey-btn">🔑 Add an AI provider</a>
+        </div>
+      </section>
+
+      <!-- Activity -->
+      <section id="home-tab-activity" class="home-tab">
+        <div class="home-tab-hdr">Activity</div>
+        <div class="home-tab-sub">A plain-language log of what's been happening behind the scenes.</div>
+        <div class="panel" style="background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:6px 16px;">
+          <div id="home-activity-list"></div>
+        </div>
+      </section>
+
+    </main>
+  </div>
+</div>
+
+<div class="layout screen" id="dev-screen">
+
+  <!-- ═══════════════════ SIDEBAR ═══════════════════ -->
+  <aside>
+
+    <!-- THIS MACHINE — local agents -->
+    <div>
+      <div class="section-hdr">🖥 This Machine <span class="count-chip" id="local-agent-count">0</span></div>
+      <div id="local-agents"></div>
+    </div>
+
+    <!-- NETWORK NODES -->
+    <div>
+      <div class="section-hdr">🌐 Network Nodes <span class="count-chip" id="node-count">0</span></div>
+      <div id="node-list"><div class="empty-msg" style="padding:12px 0;">Fetching nodes…</div></div>
+    </div>
+
+    <!-- AI SWARM -->
+    <div>
+      <div class="section-hdr">🤖 AI Swarm <span class="count-chip ai-chip" id="ai-sidebar-count">0</span></div>
+      <div class="ai-mini">
+        <div class="ai-row"><span>Global AIs</span><span class="ai-val" id="ai-global-count">—</span></div>
+        <div class="ai-row"><span>Nodes w/ AI</span><span class="ai-val" id="ai-nodes-count">—</span></div>
+        <div class="ai-model-list" id="ai-model-list">
+          <div style="font-size:10px;color:var(--text-muted);text-align:center;padding:4px">Detecting providers…</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- GITHUB THREAT DB -->
+    <div>
+      <div class="section-hdr">⬆ GitHub Push <span class="count-chip" id="gh-badge">0</span></div>
+      <div class="panel">
+        <div class="gh-stats">
+          <div class="gh-stat"><div class="gh-num" id="gh-total">0</div><div class="gh-lbl">Committed</div></div>
+          <div class="gh-stat"><div class="gh-num" id="gh-pending">0</div><div class="gh-lbl">Pending</div></div>
+          <div class="gh-stat"><div class="gh-num" id="gh-last-lbl" style="font-size:12px;padding-top:4px">—</div><div class="gh-lbl">Last Push</div></div>
+        </div>
+        <div class="gh-recent" id="gh-recent">
+          <div class="empty-msg" style="padding:12px">Waiting for first commit…</div>
+        </div>
+        <div style="padding:6px 14px;text-align:right"><a href="https://github.com/gatsbysdream25-max/SwarmSentinel/tree/main/threats" target="_blank" rel="noopener" style="font-size:10px;color:var(--gh);text-decoration:none;">view repo ↗</a></div>
+      </div>
+    </div>
+
+    <!-- WINDOWS DEFENDER (hidden until a host actually reports Defender status) -->
+    <div id="defender-section" style="display:none">
+      <div class="section-hdr">🛡 Windows Defender</div>
+      <div class="def-mini">
+        <div class="def-row"><span>Status</span><span class="def-val" id="def-enabled">—</span></div>
+        <div class="def-row"><span>Real-Time</span><span class="def-val" id="def-realtime">—</span></div>
+        <div class="def-row"><span>Signatures</span><span class="def-val" id="def-sigver" style="font-size:10px">—</span></div>
+        <div class="def-row"><span>VirusTotal</span><span class="def-val" id="def-vt">—</span></div>
+      </div>
+      <div class="section-hdr" style="margin-top:10px">Events</div>
+      <div id="defender-log">
+        <div class="empty-msg">Awaiting Defender events…</div>
+      </div>
+    </div>
+
+  </aside>
+
+  <!-- ═══════════════════ MAIN CONTENT ═══════════════════ -->
+  <div class="content">
+
+    <div style="display:flex;justify-content:flex-end;">
+      <a href="/setup" class="dev-apikey-btn">🔑 Manage API Keys &amp; AI Providers</a>
+    </div>
+
+    <!-- Summary bar -->
+    <div class="summary-bar">
+      <div class="sum-card"><div class="sum-num num-crit" id="cnt-CRITICAL">0</div><div class="sum-label">Critical</div></div>
+      <div class="sum-card"><div class="sum-num num-high" id="cnt-HIGH">0</div><div class="sum-label">High</div></div>
+      <div class="sum-card"><div class="sum-num num-med" id="cnt-MEDIUM">0</div><div class="sum-label">Medium</div></div>
+      <div class="sum-card"><div class="sum-num num-low" id="cnt-LOW">0</div><div class="sum-label">Low</div></div>
+      <div class="sum-card"><div class="sum-num num-info" id="cnt-total">0</div><div class="sum-label">Total</div></div>
+      <div class="sum-card"><div class="sum-num num-ai" id="cnt-ai-analyzed">0</div><div class="sum-label">AI Analyzed</div></div>
+      <div class="sum-card"><div class="sum-num" id="cnt-instances" style="color:var(--accent2);">0</div><div class="sum-label">Instances</div></div>
+      <div class="sum-card"><div class="sum-num" id="cnt-swarm-agents" style="color:var(--green);">0</div><div class="sum-label">Swarm Agents</div></div>
+      <div class="sum-card"><div class="sum-num" id="cnt-download-num" style="color:var(--yellow);">1</div><div class="sum-label">Download #</div></div>
+    </div>
+
+    <!-- Critical alert banner -->
+    <div id="alert-banner">
+      <div class="alert-title">⚠ CRITICAL THREAT DETECTED</div>
+      <div class="alert-detail" id="alert-detail"></div>
+    </div>
+
+    {% if signed_in %}
+    <!-- Pending Remediation (approve-first queue, added 2026-09-22) -->
+    <div class="panel" id="remediation-panel" style="display:none;">
+      <div class="panel-hdr">
+        <div class="panel-title">
+          &#9940; Pending Remediation
+          <span class="badge-count" id="remediation-badge">0</span>
+        </div>
+        <span style="font-size:10px;color:var(--text-muted);">A high-confidence AI consensus proposes these; nothing is blocked until you approve.</span>
+      </div>
+      <div class="tbl-scroll">
+        <table id="remediation-table">
+          <thead>
+            <tr>
+              <th>Proposed</th>
+              <th>Kind</th>
+              <th>Target</th>
+              <th>Reason</th>
+              <th>Actions</th>
+            </tr>
+          </thead>
+          <tbody id="remediation-body"></tbody>
+        </table>
+      </div>
+    </div>
+    {% endif %}
+
+    <!-- Live Threat Feed -->
+    <div class="panel">
+      <div class="panel-hdr">
+        <div class="panel-title">
+          🔍 Live Threat Feed
+          <span class="badge-count" id="threat-badge">0</span>
+        </div>
+        <div class="filter-bar">
+          <button class="flt-btn active" data-on-click="setFilter" data-args='["ALL"]'>All</button>
+          <button class="flt-btn" data-on-click="setFilter" data-args='["CRITICAL"]'>Critical</button>
+          <button class="flt-btn" data-on-click="setFilter" data-args='["HIGH"]'>High</button>
+          <button class="flt-btn" data-on-click="setFilter" data-args='["AI_ANALYZED"]'>AI Analyzed</button>
+        </div>
+      </div>
+      <div class="tbl-scroll">
+        <table id="threat-table">
+          <thead>
+            <tr>
+              <th>Time</th>
+              <th>Sev</th>
+              <th>AI</th>
+              <th>Source</th>
+              <th>Category</th>
+              <th>Title</th>
+              <th>IOC / Origin</th>
+              <th>Actions</th>
+            </tr>
+          </thead>
+          <tbody id="threat-body">
+            <tr><td colspan="8"><div class="empty-msg">Monitoring active — no threats detected yet.</div></td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- Collective Intelligence: the whole bottom of the page -->
+    <div class="panel" id="collective-panel">
+      <div class="panel-hdr">
+        <div class="panel-title">
+          🌐 Collective Intelligence
+          <span class="badge-count badge-collective" id="collective-badge">0</span>
+        </div>
+        <span style="font-size:10px;color:var(--text-muted);">Hub backend</span>
+      </div>
+      <div id="collective-log" style="max-height:520px;overflow-y:auto;">
+        <div class="empty-msg">Fetching collective data…</div>
+      </div>
+    </div>
+
+  
+
+  </div>
+</div>
+
+<div id="ssai-tip" role="tooltip"></div>
+
+<script nonce="{{ csp_nonce }}">
+// Tooltips: shown at once under the pointer, whatever the page redraws. The native title tooltip waits about a second on one
+// unchanged element, and the tables were rebuilt every 5 seconds, so it never appeared. Every title="" on the page is
+// adopted here the first time the pointer reaches it (the browser's own tooltip is removed so there is only one).
+(function tooltips() {
+  const tip = document.getElementById('ssai-tip');
+  if (!tip) return;
+  function hide() { tip.style.display = 'none'; }
+  document.addEventListener('mousemove', e => {
+    const host = e.target.closest ? e.target.closest('[title], [data-tip]') : null;
+    if (!host) { hide(); return; }
+    if (host.hasAttribute('title')) {
+      const t = host.getAttribute('title');
+      host.removeAttribute('title');
+      if (t) host.setAttribute('data-tip', t);
+    }
+    const text = host.getAttribute('data-tip');
+    if (!text) { hide(); return; }
+    if (tip.textContent !== text) tip.textContent = text;
+    tip.style.display = 'block';
+    const pad = 14, w = tip.offsetWidth, h = tip.offsetHeight;
+    let x = e.clientX + pad, y = e.clientY + pad;
+    if (x + w > window.innerWidth - 8) x = Math.max(8, e.clientX - w - pad);
+    if (y + h > window.innerHeight - 8) y = Math.max(8, e.clientY - h - pad);
+    tip.style.left = x + 'px'; tip.style.top = y + 'px';
+  }, { passive: true });
+  document.addEventListener('mouseleave', hide);
+  window.addEventListener('scroll', hide, { passive: true, capture: true });
+})();
+
+// Server-injected: only pages rendered by this Flask app (i.e. loaded over
+// the LAN by someone who already has dashboard access) know this value —
+// it's what lets the dashboard's own remediation buttons call the
+// Admin-only mutation endpoints (resolve/dismiss/block/allowlist): a signed-in session plus this CSRF token
+// without exposing them to arbitrary cross-origin callers (see app.py's
+// _check_auth()).
+const CSRF_TOKEN = {{ csrf_token | tojson }};   // the API key is never sent to a browser
+async function signOut() {
+  try { await fetch('/logout', { method: 'POST', headers: _authHeaders() }); } catch (e) {}
+  window.location.href = '/login';
+}
+
+function _authHeaders(extra) {
+  return Object.assign({ 'X-CSRF-Token': CSRF_TOKEN }, extra || {});
+}
+
+// ═══════════════════════════════════════════════════════════════
+// Home view / Developer view toggle (2026-08-24)
+// Purely a client-side lens over the same data — no new endpoints.
+// Remembered per-browser so it doesn't reset on every reload.
+// ═══════════════════════════════════════════════════════════════
+function setMode(mode) {
+  const isHome = mode === 'home';
+  document.getElementById('home-screen').style.display = isHome ? 'flex' : 'none';
+  document.getElementById('dev-screen').style.display  = isHome ? 'none' : 'grid';
+  document.getElementById('btn-mode-home').classList.toggle('active', isHome);
+  document.getElementById('btn-mode-dev').classList.toggle('active', !isHome);
+  try { localStorage.setItem('ssai_dashboard_mode', mode); } catch (e) {}
+  if (isHome) renderHomeView();
+}
+// Redraw a Home list without losing what the person has opened: the page re-renders every poll, which used to snap every
+// expanded card and "technical details" panel shut a few seconds after it was opened. Nothing is touched if the markup is the same.
+const _OPENABLE = '.home-ai-card, .home-tcard-tech';
+function setHomeHtml(el, html) {
+  if (!el || el._lastHtml === html) return;
+  const open = new Set();
+  el.querySelectorAll(_OPENABLE).forEach(n => { if (n.classList.contains('open') && n.dataset.okey) open.add(n.dataset.okey); });
+  el.innerHTML = html;
+  el._lastHtml = html;
+  if (!open.size) return;
+  el.querySelectorAll(_OPENABLE).forEach(n => {
+    if (!open.has(n.dataset.okey)) return;
+    n.classList.add('open');
+    const body = n.closest('.home-tcard-body');
+    const btn = body && n.classList.contains('home-tcard-tech') ? body.querySelector('.home-btn-text') : null;
+    if (btn) btn.textContent = 'Hide technical details';
+  });
+}
+function toggleHomeTech(btn) {
+  const tech = btn.closest('.home-tcard-body').querySelector('.home-tcard-tech');
+  const open = tech.classList.toggle('open');
+  btn.textContent = open ? 'Hide technical details' : 'Show technical details';
+}
+// Runs once the whole script has been read: setMode('home') draws the Home view, which needs state declared further down.
+document.addEventListener('DOMContentLoaded', function initMode() {
+  let saved = 'dev';
+  try { saved = localStorage.getItem('ssai_dashboard_mode') || 'dev'; } catch (e) {}
+  setMode(saved);
+});
+
+// ═══════════════════════════════════════════════════════════════
+// State
+// ═══════════════════════════════════════════════════════════════
+let allThreats    = [];
+let activeFilter  = 'ALL';
+let aiAnalyzedCount = 0;
+let ghRecentItems = [];
+
+// Home view's own state — latest snapshot fields it needs beyond allThreats,
+// plus which tab/filter is currently showing. Populated in pollAll().
+let activeHomeTab       = 'overview';
+let homeFindingsFilter  = 'all';
+let lastNodes           = [];
+let lastLocalAgents     = [];
+let lastAiModels        = {};
+let lastGithubStats     = null;
+
+// FIX (2026-08-20): removed dead SocketIO client wiring — this app has no
+// Flask-SocketIO server (confirmed, see project memory), so the client
+// never did anything but load an unpinned third-party script and fire
+// 'connect_error' once. All the actual data flow already goes through the
+// REST poller (pollAll() below); the handler functions below are called
+// from there directly. REST mode is simply the only mode.
+setDot('conn-dot', false, 'warn');
+setText('conn-label', 'REST mode');
+
+// ── Clock ─────────────────────────────────────────────────────
+setInterval(() => {
+  document.getElementById('clock').textContent = new Date().toLocaleTimeString();
+}, 1000);
+
+// ═══════════════════════════════════════════════════════════════
+// Summary handler — also updates AI swarm sidebar
+// ═══════════════════════════════════════════════════════════════
+function handleSummary(s) {
+  if (!s) return;
+  if (s.total_agents !== undefined) setText('local-agent-count', s.total_agents);
+
+  if (s.swarm) {
+    setText('cnt-instances', s.swarm.instance_count || 0);
+    setText('cnt-swarm-agents', s.swarm.swarm_total || s.swarm.total_agents || 0);
+    setText('cnt-download-num', s.swarm.download_number || 1);
+  }
+
+  if (s.ai_swarm) {
+    const sw = s.ai_swarm;
+    setText('ai-sidebar-count', sw.active_count || 0);
+    setText('hdr-ai-count', sw.active_count || 0);
+    if (s.swarm && s.swarm.swarm_total) setText('ai-global-count', s.swarm.swarm_total);
+    if (sw.total)      setText('ai-global-count', sw.total);
+    if (sw.capabilities && sw.capabilities.length) {
+      renderAiSwarmSidebar(sw.active_count || 0, sw.capabilities);
+    } else {
+      setText('ai-sidebar-count', sw.active_count || 0);
+      setText('hdr-ai-count', sw.active_count || 0);
+    }
+  }
+
+  if (s.github) {
+    updateGitHubPanel(s.github);
+  }
+}
+
+function handleCloudStatus(s) {
+  const ok = s && s.connected;
+  setDot('cloud-dot', ok, ok ? null : 'warn');
+  setText('cloud-label', ok ? 'Hub: Online' : 'Hub: Offline');
+}
+
+// ═══════════════════════════════════════════════════════════════
+// Threat feed
+// ═══════════════════════════════════════════════════════════════
+function addThreat(t, isNew) {
+  if (allThreats.find(x => x.id === t.id)) return;
+  t._isNew = isNew;
+  allThreats.unshift(t);
+  if (t.ai_verdict) aiAnalyzedCount++;
+  updateSummary();
+}
+
+function addOrUpdateThreat(t, isNew) {
+  const idx = allThreats.findIndex(x => x.id === t.id);
+  if (idx >= 0) {
+    // Merge every poll's copy (2026-09-30): status changes made elsewhere, new sightings and re-alert state used to be
+    // ignored here unless an AI verdict had just arrived.
+    const prev = allThreats[idx];
+    if (!prev.ai_verdict && t.ai_verdict) aiAnalyzedCount++;
+    allThreats[idx] = { ...prev, ...t, _isNew: false };
+  } else {
+    t._isNew = isNew;
+    if (t.ai_verdict) aiAnalyzedCount++;
+    allThreats.unshift(t);
+  }
+  updateSummary();
+}
+
+function updateSummary() {
+  const c = { CRITICAL:0, HIGH:0, MEDIUM:0, LOW:0, INFO:0 };
+  allThreats.forEach(t => { const l = t.severity_label || 'INFO'; c[l in c ? l : 'INFO']++; });
+  setText('cnt-CRITICAL', c.CRITICAL);
+  setText('cnt-HIGH',     c.HIGH);
+  setText('cnt-MEDIUM',   c.MEDIUM);
+  setText('cnt-LOW',      c.LOW + c.INFO);
+  setText('cnt-total',    allThreats.length);
+  setText('cnt-ai-analyzed', aiAnalyzedCount);
+  setText('threat-badge', allThreats.length);
+}
+
+function setFilter(f) {
+  activeFilter = f;
+  document.querySelectorAll('.flt-btn').forEach(b => {
+    const label = b.textContent.trim();
+    const match =
+      (f === 'ALL'         && label === 'All')         ||
+      (f === 'CRITICAL'    && label === 'Critical')     ||
+      (f === 'HIGH'        && label === 'High')         ||
+      (f === 'AI_ANALYZED' && label === 'AI Analyzed');
+    b.classList.toggle('active', match);
+  });
+  renderTable();
+}
+
+// Groups repeat findings (e.g. the same "suspicious port 8080" firing every
+// scan interval) into one row with an occurrence count, instead of flooding
+// the table with near-duplicates. Grouped on category+source — distinct
+// sources or distinct categories still get their own rows.
+function groupThreats(list) {
+  const groups = new Map();
+  for (const t of list) {
+    const key = `${t.category || ''}|${t.source || ''}|${t.source_tag || ''}|${t.node_id || ''}`;
+    let g = groups.get(key);
+    if (!g) {
+      g = { latest: t, count: 0, ids: [], anyPending: false, firstSeen: t.first_seen || t.timestamp };
+      groups.set(key, g);
+    }
+    // One row can stand for many sightings (the hub merges repeats by fingerprint), so count those, not rows.
+    g.count += Math.max(1, Number(t.occurrences) || 1);
+    g.ids.push(t.id);
+    if (!t.status || t.status === 'active') g.anyPending = true;
+    if (new Date(t.timestamp) > new Date(g.latest.timestamp)) g.latest = t;
+    const seen = t.first_seen || t.timestamp;
+    if (new Date(seen) < new Date(g.firstSeen)) g.firstSeen = seen;
+  }
+  return [...groups.values()].sort((a, b) => new Date(b.latest.timestamp) - new Date(a.latest.timestamp));
+}
+
+function renderTable() {
+  const tbody = document.getElementById('threat-body');
+  let visible = allThreats;
+  if      (activeFilter === 'AI_ANALYZED') visible = allThreats.filter(t => t.ai_verdict);
+  else if (activeFilter !== 'ALL')         visible = allThreats.filter(t => t.severity_label === activeFilter);
+
+  if (visible.length === 0) {
+    tbody.innerHTML = `<tr><td colspan="8"><div class="empty-msg">No threats match this filter.</div></td></tr>`;
+    tbody._lastHtml = null;
+    return;
+  }
+  const groups = groupThreats(visible).slice(0, 300);
+  const rowsHtml = groups.map(g => {
+    const t = g.latest;
+    const ts     = t.timestamp ? new Date(t.timestamp).toLocaleTimeString() : '—';
+    const isNew  = t._isNew; t._isNew = false;
+    const aiCell  = renderAiVerdictCell(t.ai_verdict);
+    const idsAttr = g.ids.join(',');
+    // Allowlist only makes sense for port-identified threats (source ends
+    // in ":<port>") — suspicious-port, c2-beacon, etc. Scoped to
+    // (type, port) network-wide, not this specific device: see
+    // /api/allowlist's docstring in app.py for why (masked IPs collapse
+    // every LAN host to the same string on this /24 network).
+    const portMatch = (t.source || '').match(/:(\d+)$/);
+    const allowBtn = portMatch
+      // SECURITY (2026-09-04): t.category/t.type is attacker-influenceable
+      // (submit_threat() accepts it from any caller holding the API key,
+      // including the browser extension) and was interpolated raw inside a
+      // single-quoted JS string literal in this onclick attribute. esc()
+      // only HTML-entity-encodes &/</>/" — it does NOT escape the single
+      // quote that delimits this string, so a category value containing a
+      // `'` closed the string early and ran arbitrary JS for every viewer
+      // of the dashboard (stored XSS). HTML-entity-escaping can't fix an
+      // inline-event-handler sink like this either way, since the browser
+      // decodes attribute entities *before* parsing the JS — the only safe
+      // fix is to serialize the value as a JS string literal (JSON.stringify
+      // handles backslash/quote/control-char escaping correctly) and then
+      // HTML-attribute-escape *that*, so the browser's entity-decode pass
+      // reconstructs exactly the JSON.stringify output as JS source.
+      ? `<button class="action-btn action-allow" ${da('allowlistGroup', [idsAttr, t.category || t.type || '', Number(portMatch[1])])} title="Allowlist port ${portMatch[1]} for this threat type (network-wide)">🔕</button>`
+      : '';
+    const blk = blockTarget(t);
+    const idn = (t.identifiable || blk) ? `<button class="action-btn identify-btn" ${da('identifyThreat', [Number(t.id)])} title="What is this address?">🔍</button>` : '';
+    const actionsCell = !g.anyPending
+      ? `<span style="font-size:9px;color:var(--text-muted);text-transform:uppercase;">${esc(t.status)}</span>${t.status === 'blocked' ? ` <button class="action-btn action-dismiss" ${da('threatActionGroup', [idsAttr, 'unblock'])} title="Undo the block">↩</button>` : ''}${idn}`
+      : `<div class="threat-actions">
+          ${idn}
+          <button class="action-btn action-resolve" ${da('threatActionGroup', [idsAttr, 'resolve'])} title="Mark all resolved">✓</button>
+          <button class="action-btn action-dismiss" ${da('threatActionGroup', [idsAttr, 'dismiss'])} title="Dismiss all">✕</button>
+          ${blk ? `<button class="action-btn action-block" ${da('threatActionGroup', [idsAttr, 'block'])} title="Block ${esc(blockScope(blk))}">⛔</button>` : ''}
+          ${allowBtn}
+        </div>`;
+    const countBadge = g.count > 1
+      ? `<span class="occur-badge" title="${esc(t.still_active || (g.count + ' occurrences since ' + new Date(g.firstSeen).toLocaleString()))}">×${g.count}</span>`
+      : (t.still_active ? `<span class="occur-badge" title="${esc(t.still_active)}">↻ ${t.alert_count}</span>` : '');
+    return `<tr class="${isNew ? 'new-row' : ''}">
+      <td class="time-text">${ts}</td>
+      <td><span class="sev-pill sev-${t.severity_label || 'INFO'}">${t.severity_label || 'INFO'}</span></td>
+      <td>${aiCell}</td>
+      <td><span class="agent-tag">${esc(t.detected_by || '—')}</span></td>
+      <td>${esc(t.category || '—')}</td>
+      <td>${esc(t.description || '—')}${countBadge}${t.av_confirmed ? '<span class="av-badge">AV✓</span>' : ''}</td>
+      <td class="src-text" title="${esc(t.source || '')}">${esc(t.source || '—')}</td>
+      <td>${actionsCell}</td>
+    </tr>`;
+  }).join('');
+  if (tbody._lastHtml !== rowsHtml) { tbody.innerHTML = rowsHtml; tbody._lastHtml = rowsHtml; }
+
+  renderHomeView();
+}
+
+// ═══════════════════════════════════════════════════════════════
+// Home view rendering (2026-08-24) — same allThreats data as the
+// table above, translated into plain language. See project memory
+// for the full category dictionary rationale.
+// ═══════════════════════════════════════════════════════════════
+const HOME_COPY = {
+  'ssh-login':          { icon: '🔑', lvl: 'fyi',       title: 'Someone signed in remotely',
+                           desc: 'A remote sign-in happened on one of your machines. Most likely you or an automated task — just flagging it for the record.' },
+  'suspicious-port':     { icon: '🔌', lvl: 'review',    title: 'An unusual open door was found on your network',
+                           desc: "A network port that's normally closed showed up open on one of your devices. Often a smart-home gadget or app doing this on purpose — worth confirming you recognize it." },
+  'disk-full':           { icon: '💾', lvl: 'review',    title: 'A computer is running low on storage',
+                           desc: 'One of the machines being watched is running out of disk space. Left alone, this can slow things down or cause a crash.' },
+  'service-failure':     { icon: '⚙️', lvl: 'review',    title: 'A background service stopped and restarted',
+                           desc: 'Part of the monitoring system stopped unexpectedly. It was restarted automatically — just letting you know it happened.' },
+  'unexpected-listener': { icon: '📡', lvl: 'attention', title: 'A program started accepting connections unexpectedly',
+                           desc: "New software is listening for network connections. Worth confirming it's something you installed on purpose." },
+  'dns-anomaly':         { icon: '🌐', lvl: 'review',    title: 'Unusual internet lookup pattern',
+                           desc: 'A device is looking up website addresses in an unusual way. Sometimes normal app behavior, sometimes worth a look.' },
+  'malicious-domain':    { icon: '🚫', lvl: 'attention', title: 'Contact with a known bad website',
+                           desc: 'A device on your network reached out to an address known for spreading malware.' },
+  'malware-url':         { icon: '🚫', lvl: 'attention', title: 'Contact with a known bad website',
+                           desc: 'A device on your network reached out to a web address known for hosting malware.' },
+  'brute-force':         { icon: '🔨', lvl: 'attention', title: 'Repeated break-in attempts',
+                           desc: 'Someone tried to log in over and over and failed. Often an automated bot scanning the internet, not a targeted attack.' },
+  'file-modification':   { icon: '📄', lvl: 'attention', title: 'An important file was changed',
+                           desc: 'A protected file was modified. Worth confirming this was you or your normal update process.' },
+  'suspicious-process':  { icon: '❓', lvl: 'attention', title: 'An unrecognized program is running',
+                           desc: "Software is running that doesn't match anything expected on this machine." },
+  'c2-beacon':           { icon: '📶', lvl: 'attention', title: "Signs of a device 'phoning home'",
+                           desc: 'Traffic pattern matches malware checking in with a remote controller. Worth a close look.' },
+};
+const HOME_LVL_RANK = { attention: 0, review: 1, fyi: 2 };
+
+function homeCopyFor(t) {
+  const known = HOME_COPY[t.category];
+  if (known) return known;
+  // Unmapped category — fall back on severity so nothing silently
+  // disappears from Home view just because it's a new threat type.
+  const bySev = { CRITICAL: 'attention', HIGH: 'attention', MEDIUM: 'review' }[t.severity_label] || 'fyi';
+  // email-quarantine spans everything from routine spam to confirmed phish, so
+  // unlike the fixed-lvl HOME_COPY entries above, this one keeps the severity-
+  // driven lvl (a critical phish surfaces under "Needs attention", routine
+  // spam under "FYI") while still getting a proper icon/title instead of the
+  // generic fallback.
+  if (t.category === 'email-quarantine') {
+    return { icon: '📧', lvl: bySev, title: 'A suspicious email was quarantined',
+             desc: t.description || 'An email was automatically quarantined by your email security policy.' };
+  }
+  return { icon: '⚠️', lvl: bySev, title: t.category || 'Something was noticed', desc: t.description || '' };
+}
+
+function renderFindingCard(g) {
+  const t = g.latest;
+  const copy = g.copy;
+  const idsAttr = g.ids.join(',');
+  const portMatch = (t.source || '').match(/:(\d+)$/);
+  const blk = blockTarget(t);
+  const blockBtn = blk
+    ? `<button class="home-btn" ${da('threatActionGroup', [idsAttr, 'block'])}>${blk.kind === 'ip' ? 'Block this address' : 'Block this site'}</button>`
+    : '';
+  const idnBtn = (t.identifiable || blk)
+    ? `<button class="home-btn identify-btn" ${da('identifyThreat', [Number(t.id)])}>What is this?</button>` : '';
+  return `<div class="home-tcard lvl-${copy.lvl}">
+    <div class="home-tcard-icon">${copy.icon}</div>
+    <div class="home-tcard-body">
+      <div class="home-tcard-top">
+        <div class="home-tcard-title">${esc(copy.title)}</div>
+        <div class="home-tcard-when">${timeSince(t.timestamp)}</div>
+      </div>
+      <div class="home-tcard-desc">${esc(copy.desc)}</div>
+      ${aiSummaryHtml(t)}
+      <div class="home-tcard-actions">
+        <button class="home-btn primary" ${da('threatActionGroup', [idsAttr, 'resolve'])}>Mark as handled</button>
+        <button class="home-btn" ${da('threatActionGroup', [idsAttr, 'dismiss'])}>Not a concern</button>
+        ${blockBtn}
+        ${idnBtn}
+        <button class="home-btn-text" ${da('toggleHomeTech', [], 'this')}>Show technical details</button>
+      </div>
+      <div class="home-tcard-tech" data-okey="${esc(idsAttr)}">
+        <div><b>Category:</b> ${esc(t.category || '—')}</div>
+        <div><b>Source:</b> ${esc(t.source || '—')}</div>
+        <div><b>Detected by:</b> ${esc(t.detected_by || '—')}</div>
+        ${t.still_active ? `<div><b>Status:</b> ${esc(t.still_active)}</div>` : ''}
+        <div><b>Severity:</b> ${esc(t.severity_label || '—')}${g.count > 1 ? ` &nbsp;·&nbsp; seen ${g.count} times since ${new Date(g.firstSeen).toLocaleString()}` : ''}</div>
+        ${aiDetailHtml(t)}
+      </div>
+    </div>
+  </div>`;
+}
+
+// /api/nodes includes this box's own self-registered row. "Other computers"
+// anywhere in Home view means everyone except that one.
+function homeOtherNodes() {
+  const thisHost = (lastLocalAgents[0] && lastLocalAgents[0].hostname) || 'This computer';
+  return lastNodes.filter(n => (n.name || n.hostname || '') !== thisHost);
+}
+
+function homeFindingGroups() {
+  const pending = allThreats.filter(t => !t.status || t.status === 'active');
+  return groupThreats(pending)
+    .map(g => Object.assign(g, { copy: homeCopyFor(g.latest) }))
+    .sort((a, b) => HOME_LVL_RANK[a.copy.lvl] - HOME_LVL_RANK[b.copy.lvl] || new Date(b.latest.timestamp) - new Date(a.latest.timestamp));
+}
+
+// ── Sidebar tab switching ────────────────────────────────────────
+function setHomeTab(tab) {
+  activeHomeTab = tab;
+  document.querySelectorAll('.home-nav-btn[data-hometab]').forEach(b => b.classList.toggle('active', b.dataset.hometab === tab));
+  document.querySelectorAll('.home-tab').forEach(s => s.classList.toggle('active', s.id === 'home-tab-' + tab));
+}
+
+function setHomeFindingsFilter(lvl) {
+  homeFindingsFilter = lvl;
+  document.querySelectorAll('#home-findings-filter button').forEach(b => b.classList.toggle('active', b.dataset.lvl === lvl));
+  renderHomeFindings();
+}
+
+function renderHomeFindings() {
+  const listEl = document.getElementById('home-card-list');
+  if (!listEl) return;
+  const groups = homeFindingGroups();
+  const filtered = homeFindingsFilter === 'all' ? groups : groups.filter(g => g.copy.lvl === homeFindingsFilter);
+  setHomeHtml(listEl, filtered.length
+    ? filtered.slice(0, 60).map(renderFindingCard).join('')
+    : `<div class="empty-msg">Nothing here.</div>`);
+}
+
+function renderHomeOverview(groups) {
+  const attnCount   = groups.filter(g => g.copy.lvl === 'attention').length;
+  const reviewCount = groups.filter(g => g.copy.lvl === 'review').length;
+
+  const heroEl = document.getElementById('home-hero');
+  const eyeEl  = document.getElementById('home-hero-eyebrow');
+  const headEl = document.getElementById('home-hero-headline');
+  const subEl  = document.getElementById('home-hero-sub');
+  heroEl.className = 'home-hero ' + (attnCount ? 'state-attention' : reviewCount ? 'state-review' : 'state-clear');
+  if (attnCount) {
+    eyeEl.textContent  = '● Needs attention';
+    headEl.textContent = `${attnCount} thing${attnCount === 1 ? '' : 's'} need${attnCount === 1 ? 's' : ''} a look soon`;
+    subEl.textContent  = 'Nothing to panic about, but these are worth checking today.';
+  } else if (reviewCount) {
+    eyeEl.textContent  = '● Worth a look';
+    headEl.textContent = `${reviewCount} thing${reviewCount === 1 ? '' : 's'} could use your attention`;
+    subEl.textContent  = 'Nothing urgent — your network is being watched around the clock. Worth a look when you have a minute.';
+  } else {
+    eyeEl.textContent  = '● All clear';
+    headEl.textContent = 'No open findings right now';
+    subEl.textContent  = "Your network is being watched around the clock. We'll let you know here if anything needs a look.";
+  }
+
+  const providers = homeAiProviderGroups();
+  const liveCount = providers.filter(p => p.status === 'live').length;
+
+  document.getElementById('home-quickstats').innerHTML = `
+    <button class="home-qstat ${attnCount ? 'attn' : 'ok'}" data-on-click="setHomeTab" data-args='["findings"]'>
+      <div class="home-qstat-num">${attnCount}</div>
+      <div class="home-qstat-lbl">Need attention now</div>
+    </button>
+    <button class="home-qstat" data-on-click="setHomeTab" data-args='["devices"]'>
+      <div class="home-qstat-num">${1 + homeOtherNodes().length}</div>
+      <div class="home-qstat-lbl">Devices watched</div>
+    </button>
+    <button class="home-qstat ${liveCount ? 'ok' : ''}" data-on-click="setHomeTab" data-args='["ai"]'>
+      <div class="home-qstat-num">${liveCount}/${providers.length}</div>
+      <div class="home-qstat-lbl">AI assistants active</div>
+    </button>`;
+
+  setHomeHtml(document.getElementById('home-card-list-preview'), groups.length
+    ? groups.slice(0, 3).map(renderFindingCard).join('')
+    : `<div class="empty-msg">Nothing to show — you're all caught up.</div>`);
+
+  setHomeHtml(document.getElementById('home-ai-list-preview'), renderAiCards(providers.slice(0, 3)));
+}
+
+// ═══════════════════════════════════════════════════════════════
+// AI Assistants — derives "what is it actually doing" from real
+// consensus results already attached to allThreats, rather than a
+// bare "active" flag. A provider can be configured but silently
+// broken (see project memory on deprecated Groq/Gemini model IDs),
+// so "hasn't weighed in recently" is deliberately a distinct,
+// honest state from "active" — not just green-dot theater.
+// ═══════════════════════════════════════════════════════════════
+const AI_PROVIDER_ICON = {
+  ollama: '🦙', groq: '⚡', gemini: '✨', anthropic: '🧠', openrouter: '🔀',
+  mistral: '🌬️', huggingface: '🤗', cerebras: '🧩', together: '🤝',
+  kimi: '🌙', grok: '🚀',
+};
+
+function parseConsensus(t) {
+  let v = t.ai_verdict;
+  if (!v) return null;
+  if (typeof v === 'string') { try { v = JSON.parse(v); } catch (e) { return null; } }
+  return v.consensus || null;
+}
+
+function homeAiProviderGroups() {
+  const models = {};
+  Object.keys(lastAiModels).forEach(k => {
+    // BUG FIX (2026-09-06): k.split('/') was splitting on every '/', so
+    // compound model ids that contain their own slash (groq's
+    // "openai/gpt-oss-20b", openrouter's "meta-llama/llama-3.1-8b-instruct:free")
+    // got truncated to just the vendor prefix. Split on the first '/' only —
+    // everything after it is the model name.
+    const _slash = k.indexOf('/');
+    const provider = _slash === -1 ? k : k.slice(0, _slash);
+    const model    = _slash === -1 ? '' : k.slice(_slash + 1);
+    if (!models[provider]) models[provider] = { provider, models: [], count: 0 };
+    if (model) models[provider].models.push(model);
+    models[provider].count += lastAiModels[k] || 0;
+  });
+
+  // Recent contributions per provider, newest first — allThreats is
+  // already sorted newest-first (addOrUpdateThreat unshifts).
+  const contribs = {};
+  for (const t of allThreats) {
+    const c = parseConsensus(t);
+    if (!c || !c.ai_sources) continue;
+    for (const src of c.ai_sources) {
+      if (!contribs[src]) contribs[src] = [];
+      if (contribs[src].length < 5) contribs[src].push({ t, verdict: c.consensus_verdict });
+    }
+  }
+
+  return Object.values(models).map(m => {
+    const recent = contribs[m.provider] || [];
+    return {
+      provider: m.provider,
+      modelLabel: m.models.length ? [...new Set(m.models)].join(', ') : '',
+      status: recent.length ? 'live' : 'idle',
+      recent,
+    };
+  }).sort((a, b) => (b.recent.length - a.recent.length) || a.provider.localeCompare(b.provider));
+}
+
+function renderAiCards(providers) {
+  if (!providers.length) {
+    return `<div class="empty-msg">No AI providers connected yet. Add one from Developer view to start getting second opinions on findings.</div>`;
+  }
+  return providers.map(p => {
+    const icon = AI_PROVIDER_ICON[p.provider] || '🤖';
+    const statusLabel = p.status === 'live' ? 'Active' : 'Configured';
+    const body = p.recent.length
+      ? p.recent.map(r => {
+          const vcls = r.verdict === 'malicious' ? 'sev-CRITICAL' : r.verdict === 'suspicious' ? 'sev-MEDIUM' : 'sev-LOW';
+          const copy = homeCopyFor(r.t);
+          return `<div class="home-ai-activity-row">
+            <span class="home-ai-activity-time">${timeSince(r.t.timestamp)}</span>
+            <span>checked ${esc(copy.title.toLowerCase())}</span>
+            <span class="sev-pill ${vcls}" style="margin-left:auto">${esc(r.verdict || '—')}</span>
+          </div>`;
+        }).join('')
+      : `<div class="home-ai-empty">Hasn't weighed in on anything recently — it's configured, but nothing's called on it yet.</div>`;
+    return `<div class="home-ai-card" data-okey="${esc(p.provider)}" ${da('toggleOpen', [], 'this')}>
+      <div class="home-ai-head">
+        <div class="home-ai-avatar">${icon}</div>
+        <div class="home-ai-info">
+          <div class="home-ai-name">${esc(p.provider)}</div>
+          <div class="home-ai-model">${esc(p.modelLabel || 'AI analyzer')}</div>
+        </div>
+        <div class="home-ai-status ${p.status}"><span class="dot"></span>${statusLabel}</div>
+        <div class="home-ai-caret">▶</div>
+      </div>
+      <div class="home-ai-body">
+        <div class="home-ai-activity">${body}</div>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+// ═══════════════════════════════════════════════════════════════
+// Your Devices tab
+// ═══════════════════════════════════════════════════════════════
+function renderHomeDevices() {
+  const el = document.getElementById('home-devices-body');
+  if (!el) return;
+
+  const thisHost = (lastLocalAgents[0] && lastLocalAgents[0].hostname) || 'This computer';
+  const activeLocal = lastLocalAgents.filter(a => ['active','running','scanning'].includes(a.status)).length;
+
+  let html = `<div class="home-device-group">
+    <div class="home-device-group-hdr">This computer</div>
+    <div class="home-device-card">
+      <div class="home-device-icon">🖥</div>
+      <div class="home-device-info">
+        <div class="home-device-name">${esc(thisHost)}</div>
+        <div class="home-device-desc">${lastLocalAgents.length} check${lastLocalAgents.length === 1 ? '' : 's'} running — network, storage, logins, and more</div>
+      </div>
+      <div class="home-device-badge ${activeLocal ? 'on' : 'off'}">${activeLocal ? 'Watching' : 'Idle'}</div>
+    </div>
+  </div>`;
+
+  const otherNodes = homeOtherNodes();
+  html += `<div class="home-device-group">
+    <div class="home-device-group-hdr">Other computers on your network</div>
+    ${otherNodes.length ? otherNodes.map(n => {
+      const name = n.name || n.hostname || n.agentId || 'unknown';
+      const isActive = (n.status || 'idle') === 'active';
+      return `<div class="home-device-card">
+        <div class="home-device-icon">🖥</div>
+        <div class="home-device-info">
+          <div class="home-device-name">${esc(name)}</div>
+          <div class="home-device-desc">Last checked in ${n.last_seen ? timeSince(n.last_seen) : '—'}${n.ai_count ? ` · 🤖 ${n.ai_count} AI assistant${n.ai_count === 1 ? '' : 's'}` : ''}</div>
+        </div>
+        <div class="home-device-badge ${isActive ? 'on' : 'off'}">${isActive ? 'Online' : 'Idle'}</div>
+      </div>`;
+    }).join('') : `<div class="empty-msg">No other computers are checking in right now — only ${esc(thisHost)} is actively reporting.</div>`}
+  </div>`;
+
+  el.innerHTML = html;
+}
+
+// ═══════════════════════════════════════════════════════════════
+// Activity tab — GitHub backups + AI check-ins, newest first
+// ═══════════════════════════════════════════════════════════════
+function renderHomeActivity() {
+  const el = document.getElementById('home-activity-list');
+  if (!el) return;
+
+  const items = [];
+  if (lastGithubStats && lastGithubStats.recent) {
+    lastGithubStats.recent.forEach(c => items.push({
+      icon: '⬆', time: c.date, text: `Backed up new threat findings to GitHub`,
+    }));
+  }
+  homeAiProviderGroups().forEach(p => {
+    p.recent.slice(0, 2).forEach(r => items.push({
+      icon: AI_PROVIDER_ICON[p.provider] || '🤖', time: r.t.timestamp,
+      text: `${p.provider} checked a finding — called it ${r.verdict || 'unclear'}`,
+    }));
+  });
+  items.sort((a, b) => new Date(b.time) - new Date(a.time));
+
+  el.innerHTML = items.length
+    ? items.slice(0, 30).map(it => `<div class="home-activity-item">
+        <div class="home-activity-icon">${it.icon}</div>
+        <div class="home-activity-text">${esc(it.text)}</div>
+        <div class="home-activity-time">${timeSince(it.time)}</div>
+      </div>`).join('')
+    : `<div class="empty-msg">Nothing logged yet.</div>`;
+}
+
+function renderHomeView() {
+  if (!document.getElementById('home-hero')) return;
+  const groups = homeFindingGroups();
+
+  document.getElementById('home-nav-findings-badge').textContent = groups.filter(g => g.copy.lvl !== 'fyi').length;
+  document.getElementById('home-nav-devices-badge').textContent  = 1 + homeOtherNodes().length;
+  const providers = homeAiProviderGroups();
+  document.getElementById('home-nav-ai-badge').textContent = providers.filter(p => p.status === 'live').length;
+
+  renderHomeOverview(groups);
+  renderHomeFindings();
+  setHomeHtml(document.getElementById('home-ai-list'), renderAiCards(providers));
+  renderHomeDevices();
+  renderHomeActivity();
+}
+
+// ═══════════════════════════════════════════════════════════════
+// Screenshot -> threat upload (added 2026-09-06)
+// ═══════════════════════════════════════════════════════════════
+async function uploadScreenshot(evt) {
+  const file = evt.target.files[0];
+  evt.target.value = ''; // allow re-selecting the same file next time
+  if (!file) return;
+
+  const btn = document.getElementById('screenshot-btn');
+  const originalText = btn.textContent;
+  btn.textContent = '⏳';
+  btn.disabled = true;
+
+  const form = new FormData();
+  form.append('image', file);
+
+  try {
+    const res = await fetch('/api/threats/from_screenshot', {
+      method: 'POST',
+      headers: _authHeaders(), // no Content-Type — browser sets the multipart boundary
+      body: form,
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      alert(`Screenshot analysis failed: ${data.error || res.status}`);
+      return;
+    }
+    alert(`Threat submitted from screenshot (AI confidence: ${data.ai_confidence}%):\n${data.threat.type} — ${data.threat.description}`);
+    if (typeof pollAll === 'function') pollAll();
+  } catch (e) {
+    alert('Screenshot upload failed — check the connection.');
+  } finally {
+    btn.textContent = originalText;
+    btn.disabled = false;
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════
+// Remediation actions (added 2026-08-18)
+// ═══════════════════════════════════════════════════════════════
+function threatAction(id, action) {
+  return fetch(`/api/threats/${id}/${action}`, { method: 'POST', headers: _authHeaders() })
+    .then(r => r.json())
+    .then(res => {
+      if (res.ok) {
+        const t = allThreats.find(x => x.id === id);
+        if (t) t.status = res.status;
+      }
+      return res;
+    });
+}
+
+// ── Identify: what is this address? (admin only; the server enforces it, this only hides the button) ──
+function closeIdentify() { const m = document.getElementById('identify-modal'); if (m) m.remove(); }
+
+function showIdentify(html) {
+  let m = document.getElementById('identify-modal');
+  if (!m) {
+    m = document.createElement('div');
+    m.id = 'identify-modal';
+    m.onclick = ev => { if (ev.target === m) closeIdentify(); };
+    document.body.appendChild(m);
+  }
+  m.innerHTML = `<div class="idn-box"><button class="idn-x" data-on-click="closeIdentify" aria-label="Close">✕</button>${html}</div>`;
+}
+
+async function identifyThreat(id, ports) {
+  showIdentify('<p class="idn-note">Looking this up…</p>');
+  try {
+    const res = await fetch(`/api/threats/${id}/identify${ports ? '?ports=1' : ''}`, { headers: _authHeaders() });
+    const d = await res.json();
+    if (!res.ok || d.ok === false) { showIdentify(`<p class="idn-err">${esc(d.error || 'Could not identify this address')}</p>`); return; }
+    showIdentify(renderIdentify(d, id));
+  } catch (e) {
+    showIdentify('<p class="idn-err">Could not reach the server.</p>');
+  }
+}
+
+function idnRow(k, v) { return (v === undefined || v === null || v === '') ? '' : `<tr><th>${esc(k)}</th><td>${esc(v)}</td></tr>`; }
+function idnTime(v) { if (!v) return ''; const d = typeof v === 'number' ? new Date(v * 1000) : new Date(v); return isNaN(d) ? '' : d.toLocaleString(); }
+function idnTable(rows) { const body = rows.join(''); return body ? `<table>${body}</table>` : ''; }
+
+// Everything below comes from DNS, registries and devices, so all of it is escaped on the way in.
+function renderIdentify(d, id) {
+  if (d.identifiable === false) return `<h3>Can't identify this one</h3><p class="idn-note">${esc(d.reason)}</p>`;
+  let h = `<h3>${esc(d.domain || d.ip)}</h3><p class="idn-head">${esc(d.headline)}</p>`;
+  const reg = d.registry;
+  if (reg) {
+    h += '<h4>Who owns the network</h4>' + idnTable([
+      idnRow('Owner', reg.organization), idnRow('Network', reg.name), idnRow('Country', reg.country), idnRow('Range', reg.range),
+      idnRow('CIDR', reg.cidr), idnRow('Type', reg.type), idnRow('Registered', idnTime(reg.registered)),
+      idnRow('Last changed', idnTime(reg.last_changed)), idnRow('Abuse contact', reg.abuse_contact)]);
+  }
+  if (d.reverse_dns) h += '<h4>Reverse DNS</h4>' + idnTable([idnRow('Name', d.reverse_dns)]);
+  if (d.resolves_to && d.resolves_to.length) h += '<h4>Resolves to</h4>' + idnTable([idnRow('Addresses', d.resolves_to.join(', '))]);
+  const dev = d.device;
+  if (dev && Object.keys(dev).length) {
+    h += '<h4>Device</h4>' + idnTable([
+      idnRow('MAC address', dev.mac), idnRow('Vendor', dev.vendor),
+      idnRow('Randomized MAC', dev.randomized_mac === undefined ? '' : (dev.randomized_mac ? 'Yes: a private address, so the vendor is hidden (phones and laptops do this)' : 'No')),
+      idnRow('Names', (dev.names || []).join(', ')), idnRow('Known from', (dev.sources || []).join(' + ')),
+      idnRow('First seen', idnTime(dev.first_seen)), idnRow('Last DNS query', idnTime(dev.last_query)),
+      idnRow('DNS queries', dev.dns_queries)]);
+  }
+  if (d.open_ports) {
+    h += '<h4>Open ports (common list)</h4>' + (d.open_ports.length
+      ? idnTable(d.open_ports.map(p => idnRow(String(p.port), p.service || 'unknown service')))
+      : '<p class="idn-note">None of the common ports answered.</p>');
+  } else if (d.scope === 'lan') {
+    h += `<button class="idn-btn" ${da('identifyThreat', [Number(id), true])}>Check common ports</button>
+          <p class="idn-note">Makes a brief connection attempt to 24 common ports on this device.</p>`;
+  }
+  if (d.intel && d.intel.length) {
+    h += '<h4>Threat feeds</h4>' + idnTable(d.intel.map(x => `<tr><th class="idn-listed">LISTED</th><td>${esc(x.source)}: ${esc(x.malware)} (${esc(String(x.threat).replace(/_/g, ' '))}) as ${esc(x.listed_as)}</td></tr>`));
+  } else {
+    h += '<h4>Threat feeds</h4><p class="idn-note">Not listed by any feed this installation loads.</p>';
+  }
+  const hist = d.history;
+  if (hist && hist.count) {
+    h += '<h4>Seen here before</h4>' + idnTable([
+      idnRow('Threat records', hist.count), idnRow('First', idnTime(hist.first_seen)), idnRow('Last', idnTime(hist.last_seen)),
+      idnRow('Kinds', Object.entries(hist.by_type || {}).map(([k, v]) => `${k} ×${v}`).join(', ')), idnRow('AI verdict', hist.ai_verdict)]);
+  }
+  const errs = Object.entries(d.errors || {});
+  if (errs.length) h += `<p class="idn-note">Could not check: ${esc(errs.map(([k, v]) => `${k} (${v})`).join('; '))}</p>`;
+  return h;
+}
+
+// What the Block button would act on, mirroring remediation.classify_target() on the server: a public/LAN IP
+// (firewall on this host), a domain (Pi-hole deny list), or null when it cannot be blocked (masked LAN address,
+// internal monitor address). The server re-checks everything; this only decides whether to offer the button.
+function blockTarget(t) {
+  const s = String((t && (t.url || t.source)) || '').trim();
+  if (!s || /(\d\.x{2,}|x{2,}\.\d|x{2,}\.x{2,})/i.test(s)) return null;
+  let host;
+  const web = s.match(/^(?:https?|ftp):\/\/([^\/:?#\s]+)/i);
+  if (web) host = web[1];
+  else if (/^[a-z][a-z0-9+.-]*:\/\//i.test(s)) return null;
+  else host = s.split(/[\/:?#]/)[0];
+  host = host.toLowerCase().replace(/\.$/, '');
+  if (/^(127\.|0\.|22[4-9]\.|23\d\.|169\.254\.)/.test(host)) return null;
+  if (/^\d{1,3}(\.\d{1,3}){3}$/.test(host)) return { kind: 'ip', value: host };
+  if (/^([a-z0-9-]+\.)+[a-z]{2,}$/.test(host)) return { kind: 'domain', value: host };
+  return null;
+}
+
+function blockScope(tg) {
+  if (!tg) return 'this address';
+  return tg.kind === 'ip'
+    ? `the IP ${tg.value} on this host's firewall (inbound and outbound)`
+    : `the domain ${tg.value} on the Pi-hole (every device that uses it)`;
+}
+
+// Applies an action to every threat in a grouped row at once (e.g. resolving
+// a "×47 suspicious port" row resolves all 47 underlying records, not just
+// the most recent one shown).
+async function threatActionGroup(idsStr, action) {
+  const ids = idsStr.split(',').map(Number);
+  if (action === 'block' || action === 'unblock') {
+    const first = allThreats.find(x => x.id === ids[0]);
+    const what = blockScope(first ? blockTarget(first) : null);
+    const msg = action === 'block'
+      ? `Block ${what}?\n\nThis is a real change to your network. You can undo it with the ↩ button.`
+      : `Undo the block of ${what}?`;
+    if (!confirm(msg)) return;
+  }
+  const errors = new Set();
+  for (const id of ids) {
+    try {
+      const res = await threatAction(id, action);
+      if (!res.ok) errors.add(res.error || 'unknown error');
+    } catch (e) {
+      errors.add('could not reach the server');
+    }
+  }
+  if (errors.size) alert(`Could not ${action}: ${[...errors].join('; ')}`);
+  renderTable();
+}
+
+// ═══════════════════════════════════════════════════════════════
+// Pending Remediation (approve-first queue, added 2026-09-22)
+// A fresh high-confidence AI consensus proposes a block/sinkhole here;
+// nothing is ever applied until an operator approves it. See
+// remediation_queue.py / routes/remediation.py.
+// ═══════════════════════════════════════════════════════════════
+function renderPendingRemediation(list) {
+  const panel = document.getElementById('remediation-panel');
+  const body = document.getElementById('remediation-body');
+  const badge = document.getElementById('remediation-badge');
+  if (!panel || !body || !badge) return;   // not signed in — panel is not in the DOM at all
+  badge.textContent = list.length;
+  panel.style.display = list.length ? '' : 'none';
+  body.innerHTML = list.map(p => {
+    const when = new Date(p.proposed_at).toLocaleString();
+    return `<tr>
+      <td style="font-size:11px;color:var(--text-muted);white-space:nowrap;">${when}</td>
+      <td>${esc(p.kind)}</td>
+      <td style="font-family:monospace;">${esc(p.target)}</td>
+      <td style="font-size:11px;">${esc(p.reason)}</td>
+      <td style="white-space:nowrap;">
+        <button class="action-btn action-resolve" ${da('approveRemediation', [p.id])} title="Apply this block">Approve</button>
+        <button class="action-btn action-dismiss" ${da('rejectRemediation', [p.id])} title="Do nothing">Reject</button>
+      </td>
+    </tr>`;
+  }).join('');
+}
+
+function fetchPendingRemediation() {
+  if (!CSRF_TOKEN) return;   // anonymous/kiosk viewers never see this panel or call this endpoint
+  fetch('/api/remediation/', { headers: _authHeaders() })
+    .then(r => r.ok ? r.json() : [])
+    .then(renderPendingRemediation)
+    .catch(() => {});
+}
+
+async function approveRemediation(id) {
+  if (!confirm('Approve this block? It will be applied immediately and auto-reverted after its TTL unless you extend it.')) return;
+  try {
+    const res = await fetch(`/api/remediation/${id}/approve`, { method: 'POST', headers: _authHeaders() }).then(r => r.json());
+    if (!res.ok) { alert(`Could not approve: ${res.error || 'unknown error'}`); return; }
+  } catch (e) {
+    alert('Could not reach the server');
+    return;
+  }
+  fetchPendingRemediation();
+  pollAll();
+}
+
+async function rejectRemediation(id) {
+  try {
+    const res = await fetch(`/api/remediation/${id}/reject`, { method: 'POST', headers: _authHeaders() }).then(r => r.json());
+    if (!res.ok) { alert(`Could not reject: ${res.error || 'unknown error'}`); return; }
+  } catch (e) {
+    alert('Could not reach the server');
+    return;
+  }
+  fetchPendingRemediation();
+}
+
+// Allowlist a (type, port) combination so NetworkScanAgent (and any other
+// port-reporting agent) stops flagging it at the source — not just dismiss.
+// Scoped network-wide, not to this one device: see the docstring on
+// /api/allowlist in app.py for why (masked IPs collapse every LAN host to
+// the same string on this /24 network).
+async function allowlistGroup(idsStr, type, port) {
+  if (!confirm(`Allowlist port ${port} for "${type}" threats? This stops flagging that port for ANY device on the network, not just this one — the dashboard can't tell devices apart once their IPs are masked. This also dismisses the ${idsStr.split(',').length} threat(s) shown here.`)) {
+    return;
+  }
+  const note = prompt('Optional note (e.g. device name/reason):', '') || '';
+  try {
+    const res = await fetch('/api/allowlist', {
+      method: 'POST',
+      headers: _authHeaders({ 'Content-Type': 'application/json' }),
+      body: JSON.stringify({ type, port, note }),
+    }).then(r => r.json());
+    if (!res.ok) {
+      alert(`Failed to add allowlist entry: ${res.error || 'unknown error'}`);
+      return;
+    }
+  } catch (e) {
+    alert('Failed to add allowlist entry — check the connection.');
+    return;
+  }
+  await threatActionGroup(idsStr, 'dismiss');
+}
+
+// The stored consensus (ai_verdict JSON) -> its `consensus` object, or null (none yet, or a single analyzer's note).
+function consensusOf(v) {
+  if (!v) return null;
+  if (typeof v === 'string') { try { v = JSON.parse(v); } catch (e) { return null; } }
+  return (v && v.consensus && v.consensus.consensus_verdict) ? v.consensus : null;
+}
+
+// One line on a finding card: what the AI panel concluded and what it suggests doing (2026-09-30).
+function aiSummaryHtml(t) {
+  const c = consensusOf(t.ai_verdict);
+  if (!c) return '';
+  const icon = { malicious: '🔴', suspicious: '🟡' }[c.consensus_verdict] || '🟢';
+  const q = c.quorum;
+  const n = c.ai_count || (c.ai_sources || []).length;
+  const parts = [q ? `${q.agreed} of ${q.answered} AIs agreed` : (n ? `${n} AI(s) answered` : ''),
+                 c.confidence != null ? `${c.confidence}% confident` : '',
+                 q && q.degraded ? '⚠ DEGRADED: needs a person' : '', q && q.local_only ? 'local models only' : ''].filter(Boolean);
+  const act = c.recommended_action ? `<div class="home-tcard-ai-act"><b>Suggested next step:</b> ${esc(c.recommended_action)}</div>` : '';
+  return `<div class="home-tcard-ai ai-${esc(c.consensus_verdict)}">${icon} <b>AI verdict: ${esc(c.consensus_verdict)}</b>${parts.length ? ' · ' + esc(parts.join(' · ')) : ''}${act}</div>`;
+}
+
+// Technical details: how each AI voted, its reasoning, and the ATT&CK techniques it named.
+function aiDetailHtml(t) {
+  const c = consensusOf(t.ai_verdict);
+  if (!c) return '';
+  const votes = c.votes ? Object.entries(c.votes).filter(([, n]) => n).map(([k, n]) => `${n} ${k}`).join(', ') : '';
+  const who = (c.ai_sources || []).join(', ');
+  const notes = (c.specialist_notes && typeof c.specialist_notes === 'object')
+    ? Object.entries(c.specialist_notes).map(([p, n]) => `<div class="ai-note"><b>${esc(p)}:</b> ${esc(n)}</div>`).join('') : '';
+  const ttps = (c.mitre_ttps || []).length ? `<div><b>MITRE ATT&amp;CK:</b> ${esc(c.mitre_ttps.join(', '))}</div>` : '';
+  const recalled = c.recalled_from ? `<div><b>Reused</b> an earlier verdict for the same indicator.</div>` : '';
+  return `${votes ? `<div><b>AI votes:</b> ${esc(votes)}${who ? ` (${esc(who)})` : ''}</div>` : ''}${ttps}${notes}${recalled}`;
+}
+
+function renderAiVerdictCell(v) {
+  if (!v) return '<span style="color:var(--text-muted);font-size:9px">—</span>';
+  // ai_verdict comes back from the API as a JSON string (models/__init__.py
+  // stores it via json.dumps and to_dict() returns it raw) — was never
+  // parsed here, so this cell has been showing a bogus badge on every
+  // existing verdict, not just new consensus ones. Fixed 2026-08-18.
+  if (typeof v === 'string') {
+    try { v = JSON.parse(v); } catch (e) { return '<span style="color:var(--text-muted);font-size:9px">—</span>'; }
+  }
+  // Individual-analyzer verdicts ({analysis, model}) have no consensus yet —
+  // show a plain "analyzed" marker rather than a fabricated verdict badge.
+  const c = v.consensus;
+  if (!c) return '<span style="color:var(--text-muted);font-size:9px">analyzed</span>';
+  const cls = c.consensus_verdict === 'malicious'  ? 'av-malicious'  :
+              c.consensus_verdict === 'suspicious' ? 'av-suspicious' : 'av-benign';
+  const icon = c.consensus_verdict === 'malicious' ? '🔴' :
+               c.consensus_verdict === 'suspicious' ? '🟡' : '🟢';
+  // Quorum: how many models stood behind the verdict. Verdicts saved before quorum existed fall back to the raw counts.
+  const q = c.quorum || null;
+  const label = q ? q.label : `${c.ai_count} AI(s) answered`;
+  const votes = c.votes ? Object.entries(c.votes).filter(([, n]) => n).map(([k, n]) => `${n} ${k}`).join(', ') : '';
+  const vf = c.verification || null;
+  const vfNote = !vf ? '' : vf.status === 'confirmed' ? ` | independent check: confirmed by ${vf.verifier} (${vf.family})`
+               : vf.status === 'partial'  ? ` | independent check: ${vf.verifier} sees a threat but says ${vf.verdict}`
+               : vf.status === 'disputed' ? ` | independent check: ${vf.verifier} (${vf.family}) DISAGREES, says ${vf.verdict}`
+               : ` | independent check: not possible (${vf.reason || 'unavailable'})`;
+  const vfMark = !vf ? '' : vf.status === 'confirmed' ? ' ✓✓' : vf.status === 'disputed' ? ' ⚠' : vf.status === 'partial' ? ' ✓' : '';
+  const tip  = `${label} | ${c.ai_count} AI(s): ${(c.ai_sources||[]).join(', ')}${votes ? ` | votes: ${votes}` : ''} | conf: ${c.confidence}%`
+             + vfNote + (c.recommended_action ? ` | next step: ${c.recommended_action}` : '');
+  // Shown inline as agreed/answered (+ "of panel" when a provider dropped), so a consensus-of-2 never reads like a
+  // consensus-of-6, and a provider that drops out shows at once.
+  const frac = q ? `${q.agreed}/${q.answered}${q.dropped && q.dropped.length ? ` of ${q.panel}` : ''}` : `${c.ai_count}`;
+  const degraded = q && q.degraded ? ' ⚠ degraded' : '';
+  return `<span class="ai-verdict-pill ${cls}" title="${esc(tip)}">${icon} ${esc(c.consensus_verdict)} (${esc(frac)})${vfMark}${degraded}</span>`;
+}
+
+// ═══════════════════════════════════════════════════════════════
+// AI Swarm sidebar
+// ═══════════════════════════════════════════════════════════════
+function renderAiSwarmSidebar(totalCount, capabilities) {
+  setText('ai-global-count', totalCount);
+  setText('ai-sidebar-count', totalCount);
+  setText('hdr-ai-count', totalCount);
+
+  const modelList = document.getElementById('ai-model-list');
+  if (!capabilities || !capabilities.length) {
+    modelList.innerHTML = `<div style="font-size:10px;color:var(--text-muted);text-align:center;padding:4px;">No AI providers active</div>`;
+    return;
+  }
+  modelList.innerHTML = capabilities.map(c => {
+    const label = `${c.provider}/${c.model || ''}`;
+    const local = c.local ? ' 🏠' : '';
+    return `<div class="ai-model-row">
+      <span><span class="ai-model-dot"></span><span class="ai-model-name">${esc(c.provider)}</span></span>
+      <span class="ai-model-count">${esc(c.model || '')}${local}</span>
+    </div>`;
+  }).join('');
+}
+
+function renderAiSwarmFromGlobal(data) {
+  if (!data) return;
+  const total = data.total_ai_count || 0;
+  setText('ai-global-count', total);
+  setText('ai-sidebar-count', total);
+  setText('ai-nodes-count', data.nodes_with_ai || '—');
+  setText('hdr-ai-count', total);
+
+  const modelList = document.getElementById('ai-model-list');
+  const models    = data.models || {};
+  const keys      = Object.keys(models);
+  if (!keys.length) {
+    modelList.innerHTML = `<div style="font-size:10px;color:var(--text-muted);text-align:center;padding:4px;">No AI providers active</div>`;
+    return;
+  }
+  modelList.innerHTML = keys.map(k => {
+    const count = models[k];
+    // BUG FIX (2026-09-06): k.split('/') was splitting on every '/', so
+    // compound model ids that contain their own slash (groq's
+    // "openai/gpt-oss-20b", openrouter's "meta-llama/llama-3.1-8b-instruct:free")
+    // got truncated to just the vendor prefix. Split on the first '/' only —
+    // everything after it is the model name.
+    const _slash = k.indexOf('/');
+    const provider = _slash === -1 ? k : k.slice(0, _slash);
+    const model    = _slash === -1 ? '' : k.slice(_slash + 1);
+    return `<div class="ai-model-row">
+      <span><span class="ai-model-dot"></span><span class="ai-model-name">${esc(provider)}</span></span>
+      <span class="ai-model-count">${model ? esc(model) + ' ' : ''}×${count}</span>
+    </div>`;
+  }).join('');
+}
+
+// ═══════════════════════════════════════════════════════════════
+// GitHub panel
+// ═══════════════════════════════════════════════════════════════
+function updateGitHubPanel(gh) {
+  if (!gh) return;
+  const total   = gh.total_committed || 0;
+  const pending = gh.pending || 0;
+  setText('gh-total', total);
+  setText('gh-pending', pending);
+  setText('gh-badge', total);
+  setText('hdr-gh-count', total);
+
+  if (gh.last_commit) {
+    setText('gh-last-lbl', timeSince(gh.last_commit));
+  }
+
+  const recentEl = document.getElementById('gh-recent');
+  if (recentEl && gh.recent && gh.recent.length) {
+    recentEl.innerHTML = gh.recent.map(c =>
+      `<div style="padding:3px 0;border-bottom:1px solid var(--border);font-size:10px;">
+        <span style="color:var(--accent);font-family:monospace">${esc(c.hash)}</span>
+        <span style="color:var(--text);margin-left:6px">${esc((c.message||'').slice(0,55))}</span>
+        <span style="color:var(--text-muted);float:right">${timeSince(c.date)}</span>
+      </div>`
+    ).join('');
+  } else if (recentEl && total > 0 && (!gh.recent || !gh.recent.length)) {
+    recentEl.innerHTML = `<div style="font-size:10px;color:var(--text-muted);padding:4px 0">${total} commits — loading history…</div>`;
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════
+// Agent Status
+// ═══════════════════════════════════════════════════════════════
+// ── Agent on/off controls (signed-in admins only): the same switches as Settings, right in the left pane. The agent
+// runner applies a change within about 30 seconds, no restart. Anonymous and kiosk viewers have no CSRF token, so they
+// never load the menu and never see a switch.
+let agentMenu = null, agentMenuAt = 0;
+function fetchAgentMenu() {
+  if (!CSRF_TOKEN || Date.now() - agentMenuAt < 20000) return;
+  agentMenuAt = Date.now();
+  fetch('/api/settings/agents', { headers: _authHeaders() })
+    .then(r => r.ok ? r.json() : null)
+    .then(rows => {
+      if (!rows) return;
+      agentMenu = {};
+      rows.forEach(r => { agentMenu[r.name] = r; });
+      renderLocalAgents(lastLocalAgents);
+    })
+    .catch(() => {});
+}
+function agentToggle(name) {
+  const m = agentMenu && agentMenu[name];
+  if (!m) return '';
+  return `<button class="agent-toggle ${m.enabled ? 'on' : 'off'}" data-agent="${esc(name)}" aria-pressed="${m.enabled ? 'true' : 'false'}" title="${m.enabled ? 'Running. Click to switch off' : 'Switched off. Click to switch on'}">${m.enabled ? 'ON' : 'OFF'}</button>`;
+}
+async function setAgentEnabled(name, enable) {
+  const m = agentMenu && agentMenu[name];
+  if (!m) return;
+  if (!enable && m.tier === 'core' &&
+      !confirm(`Switch off ${name}?\n\n${m.notes}\n\nThis detector stops reporting until you switch it back on.`)) return;
+  try {
+    const res = await fetch('/api/settings/agents', { method: 'POST', headers: _authHeaders({ 'Content-Type': 'application/json' }),
+                                                       body: JSON.stringify({ agent: name, enabled: enable }) });
+    const j = await res.json().catch(() => ({}));
+    if (!res.ok) { alert(`Could not change ${name}: ${j.error || res.status}`); return; }
+    m.enabled = enable;
+    renderLocalAgents(lastLocalAgents);
+  } catch (e) {
+    alert('Could not reach the server');
+  }
+}
+document.addEventListener('click', ev => {
+  const b = ev.target.closest && ev.target.closest('.agent-toggle');
+  if (!b) return;
+  ev.preventDefault();
+  setAgentEnabled(b.dataset.agent, b.classList.contains('off'));
+});
+
+// Which sidebar groups the person has opened. The panel is redrawn on every poll (every few seconds), and a redraw used to
+// close them again after a moment; the open ones are remembered and drawn open. 'toggle' does not bubble, hence capture.
+const openAgentGroups = new Set();
+document.getElementById('local-agents').addEventListener('toggle', ev => {
+  const group = ev.target && ev.target.dataset && ev.target.dataset.group;
+  if (!group) return;
+  if (ev.target.open) openAgentGroups.add(group); else openAgentGroups.delete(group);
+}, true);
+
+function renderLocalAgents(agents) {
+  if (!Array.isArray(agents)) return;
+  fetchAgentMenu();
+  setText('local-agent-count', agents.length);
+  const el = document.getElementById('local-agents');
+  const _AI_ROLES = new Set(['ai_analyzer','intel_collector','cloud_sync','ai_scout','analyzer']);
+
+  const groups = Object.create(null);        // keyed by a hostname a node chose: no inherited keys such as __proto__
+  agents.forEach(a => {
+    const host = a.hostname || 'ProDesk';
+    if (!groups[host]) groups[host] = [];
+    groups[host].push(a);
+  });
+
+  const shown = new Set(agents.map(a => a.name));
+  const offList = agentMenu ? Object.values(agentMenu).filter(m => !m.enabled && !shown.has(m.name)) : [];
+  const offHtml = offList.length ? `<details data-group="__off__" ${openAgentGroups.has('__off__') ? 'open' : ''} style="margin-bottom:8px">
+      <summary style="cursor:pointer;padding:5px 8px;background:var(--surface2);border-radius:4px;font-size:11px;font-weight:600;color:var(--text);user-select:none;list-style:none;display:flex;justify-content:space-between">
+        <span>⏻ <span style="color:var(--accent)">Switched off</span></span>
+        <span style="font-weight:400;font-size:10px">${offList.length}</span>
+      </summary>
+      <div style="padding-top:6px">${offList.map(m => `<div class="agent-card" title="${esc(m.notes)}">
+        <div class="agent-name">${esc(m.name)}</div>
+        <div class="agent-badge badge-stopped">${esc(m.tier)}</div>
+        ${agentToggle(m.name)}
+      </div>`).join('')}</div>
+    </details>` : '';
+
+  el.innerHTML = Object.entries(groups).map(([host, list], idx) => {
+    const activeCount = list.filter(a => ['active','running','scanning'].includes(a.status)).length;
+
+    const cards = list.map(a => {
+      const lastScan = (a.last_scan || a.last_seen) ? new Date(a.last_scan || a.last_seen).toLocaleTimeString() : 'never';
+      const scans = a.scan_count ?? a.tasks_completed ?? '—';
+      const found = a.threat_count ?? '—';
+      const icon = _AI_ROLES.has(a.role) ? '🤖 ' : a.role === 'ai_scout' ? '🔭 ' : '';
+      return `<div class="agent-card role-${esc(a.role || '')}">
+        <div class="agent-name">${icon}${esc(a.name)}</div>
+        <div class="agent-badge badge-${esc(a.status || 'idle')}">${esc(a.status || 'idle')}</div>
+        <div class="agent-stats">${esc(String(scans))} scans · ${esc(String(found))} found · ${esc(lastScan)}</div>
+        ${agentToggle(a.name)}
+        ${a.last_error ? `<div class="agent-err">${esc(a.last_error.slice(0,70))}</div>` : ''}
+      </div>`;
+    }).join('');
+
+    return `<details data-group="${esc(host)}" ${openAgentGroups.has(host) ? 'open' : ''} style="margin-bottom:8px">
+      <summary style="cursor:pointer;padding:5px 8px;background:var(--surface2);border-radius:4px;font-size:11px;font-weight:600;color:var(--text);user-select:none;list-style:none;display:flex;justify-content:space-between;align-items:center;">
+        <span>🖥 <span style="color:var(--accent)">${esc(host)}</span></span>
+        <span style="font-weight:400;font-size:10px">${activeCount}/${list.length} active</span>
+      </summary>
+      <div style="padding-top:6px">${cards}</div>
+    </details>`;
+  }).join('') + offHtml || `<div class="empty-msg" style="padding:12px 0;">No agents are running on this node.</div>`;
+}
+
+// ═══════════════════════════════════════════════════════════════
+// Network Nodes
+// ═══════════════════════════════════════════════════════════════
+function renderNodes(nodes) {
+  const el = document.getElementById('node-list');
+  if (!nodes || !nodes.length) {
+    el.innerHTML = `<div class="empty-msg" style="padding:12px 0;">No other nodes registered.</div>`;
+    setText('node-count', 0);
+    return;
+  }
+  setText('node-count', nodes.length);
+  el.innerHTML = nodes.map(n => {
+    const name     = n.name || n.hostname || n.agentId || 'unknown';
+    const platform = n.type || n.platform || '';
+    const status   = n.status || 'idle';
+    const lastSeen = n.last_seen ? timeSince(n.last_seen) : '—';
+    const isActive = status === 'active';
+    return `<div class="node-card">
+      <div class="node-row1">
+        <div class="node-name" title="${esc(name)}">${esc(name)}</div>
+        ${platform ? `<span class="node-platform">${esc(platform)}</span>` : ''}
+        <span class="dot ${isActive ? 'on' : ''}" style="margin:0"></span>
+      </div>
+      <div class="node-meta ${isActive ? 'node-active' : 'node-idle'}">
+        ${esc(String(status))} · Last seen: ${esc(String(lastSeen))}
+        ${n.ai_count ? ` · 🤖 ${n.ai_count} AI` : ''}
+      </div>
+    </div>`;
+  }).join('');
+}
+
+// ═══════════════════════════════════════════════════════════════
+// Collective Intelligence
+// ═══════════════════════════════════════════════════════════════
+function renderCollective(threats) {
+  const el = document.getElementById('collective-log');
+  if (!threats || !threats.length) {
+    el.innerHTML = `<div class="empty-msg">No collective data yet.</div>`;
+    el._lastHtml = null;
+    setText('collective-badge', 0);
+    return;
+  }
+  setText('collective-badge', threats.length);
+  const html = threats.slice(0, 100).map(t => {
+    const ts   = t.timestamp ? new Date(t.timestamp).toLocaleTimeString() : '—';
+    const src  = t.url || t.source || t.iocHash || '—';
+    const type = t.type || t.category || 'unknown';
+    const by   = t.detected_by || t.nodeId || '?';
+    const sev  = (t.severity || 'info').toUpperCase();
+    return `<div class="intel-item">
+      <span class="sev-pill sev-${esc(String(sev))}">${esc(String(sev))}</span>
+      <span class="intel-type">${esc(type)}</span>
+      <span class="intel-src" title="${esc(src)}">${esc(src)}</span>
+      <span class="intel-by">${esc(by)} · ${ts}</span>
+    </div>`;
+  }).join('');
+  if (el._lastHtml !== html) { el.innerHTML = html; el._lastHtml = html; }
+}
+
+// ═══════════════════════════════════════════════════════════════
+// Windows Defender
+// ═══════════════════════════════════════════════════════════════
+function handleDefenderStatus(d) {
+  setValCls('def-enabled',  d.enabled              ? '✔ Active'      : '✘ Inactive',       d.enabled ? 'on' : 'off');
+  setValCls('def-realtime', d.realtime_protection   ? '✔ On'          : '✘ Off',            d.realtime_protection ? 'on' : 'off');
+  document.getElementById('def-sigver').textContent = d.signature_version || '—';
+  setValCls('def-vt',       d.virustotal_available  ? '✔ Linked'      : 'Not configured',   d.virustotal_available ? 'on' : '');
+}
+
+function addDefenderEvent(ev) {
+  const log = document.getElementById('defender-log');
+  if (log.querySelector('.empty-msg')) log.innerHTML = '';
+  const sev = ev.severity || 'INFO';
+  const col = sev === 'CRITICAL' ? '#f87171' : sev === 'HIGH' ? '#fb923c' : sev === 'MEDIUM' ? '#fbbf24' : '#94a3b8';
+  const div = document.createElement('div');
+  div.className = 'def-event';
+  div.innerHTML = `
+    <span style="color:${col};font-weight:700;font-size:9px">${esc(String(sev))}</span>
+    <span class="def-name">${esc(ev.name)}</span>
+    <span class="def-res">${esc(ev.resources)}</span>
+    <span class="time-text">${ev.detected_at ? new Date(ev.detected_at).toLocaleTimeString() : ''}</span>`;
+  log.prepend(div);
+}
+
+// ═══════════════════════════════════════════════════════════════
+// Alert banner
+// ═══════════════════════════════════════════════════════════════
+let _alertTimer;
+function showAlert(t) {
+  const b = document.getElementById('alert-banner');
+  document.getElementById('alert-detail').textContent = `${t.detected_by || t.agent || ''} · ${t.category} · ${t.description || ''}`;
+  b.style.display = 'block';
+  clearTimeout(_alertTimer);
+  _alertTimer = setTimeout(() => b.style.display = 'none', 8000);
+}
+
+// ═══════════════════════════════════════════════════════════════
+// REST polling fallback (runs always; keeps Azure VM view fresh)
+// ═══════════════════════════════════════════════════════════════
+// Deploy 3 (2026-08-18): was 8 separate fetches every 5s (~5,760 round-trips/hour
+// per open tab) — now one batched endpoint with SQL-side aggregation. Old
+// per-resource endpoints (/api/threats, /api/agents, /api/nodes, etc.) are left
+// in place, unremoved, in case this needs a fast rollback.
+// 2026-09-30: the page sends back the threat-list version it holds; the hub answers `threats: null` while that list
+// is unchanged (the bulk of every poll), JSON is gzipped, and a hidden tab stops polling until it is shown again.
+let _threatsVersion = '';
+let _polling = false;        // a slow answer must not stack up requests behind it
+function pollAll() {
+  if (document.hidden || _polling) return;
+  _polling = true;
+  const ctl = new AbortController();
+  const stall = setTimeout(() => ctl.abort(), 15000);           // a dropped Wi-Fi connection can hang a fetch for minutes
+  fetch('/api/dashboard_snapshot?tv=' + encodeURIComponent(_threatsVersion), { signal: ctl.signal }).then(r => {
+    if (r.status === 401) { window.location.href = '/login?next=' + encodeURIComponent(location.pathname); throw new Error('signed out'); }
+    if (!r.ok) throw new Error('snapshot ' + r.status);       // a 401/500 page is not a snapshot; keep showing the last good one
+    return r.json();
+  }).then(snap => {
+    if (Array.isArray(snap.threats)) {
+      snap.threats.forEach(t => addOrUpdateThreat(t, false));
+      renderTable();
+      renderCollective(snap.collective || snap.threats.slice(0, 50));
+      _threatsVersion = snap.threats_version || '';
+    }
+    renderLocalAgents(snap.agents);
+    if (snap.defender) {
+      document.getElementById('defender-section').style.display = '';
+      handleDefenderStatus(snap.defender);
+    }
+    renderNodes(snap.nodes);
+    handleCloudStatus(snap.cloud_status);
+    handleSummary(snap.summary);
+    renderAiSwarmFromGlobal(snap.ai_swarm);
+    updateGitHubPanel(snap.github_stats);
+    fetchPendingRemediation();
+
+    lastNodes       = snap.nodes || [];
+    lastLocalAgents = snap.agents || [];
+    lastAiModels    = (snap.ai_swarm && snap.ai_swarm.models) || {};
+    lastGithubStats = snap.github_stats || null;
+    renderHomeView();
+  }).catch(()=>{}).finally(() => { clearTimeout(stall); _polling = false; });
+}
+
+// Initial load
+fetch('/api/threats').then(r=>r.json()).then(list => {
+  list.forEach(t => addThreat(t, false));
+  renderTable();
+}).catch(()=>{});
+
+pollAll();
+setInterval(pollAll, 5000);
+document.addEventListener('visibilitychange', () => { if (!document.hidden) pollAll(); });
+
+// ═══════════════════════════════════════════════════════════════
+// Utilities
+// ═══════════════════════════════════════════════════════════════
+function esc(s) {
+  if (!s) return '';
+  // Escapes for safe insertion into HTML text/attribute contexts. Also
+  // encodes ' as &#39; as defense-in-depth for single-quoted HTML
+  // attributes — note this alone does NOT make it safe to drop untrusted
+  // text into an inline event-handler attribute (onclick="...'${esc(x)}'...")
+  // since the browser decodes HTML entities *before* parsing the handler as
+  // JS, so an encoded quote still becomes a literal quote in the JS source.
+  // For that sink, JSON.stringify() the value first, then esc() the result.
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
+}
+function setText(id, v)    { const e = document.getElementById(id); if (e) e.textContent = v; }
+function setDot(id, on, cls) {
+  const e = document.getElementById(id);
+  if (!e) return;
+  e.className = 'dot' + (on ? ' on' : cls === 'warn' ? ' warn' : '');
+}
+function setValCls(id, text, cls) {
+  const e = document.getElementById(id);
+  if (!e) return;
+  e.textContent = text;
+  e.className = 'def-val' + (cls ? ' ' + cls : '');
+}
+function timeSince(iso) {
+  const secs = Math.floor((Date.now() - new Date(iso)) / 1000);
+  if (secs < 60)   return `${secs}s ago`;
+  if (secs < 3600) return `${Math.floor(secs/60)}m ago`;
+  return `${Math.floor(secs/3600)}h ago`;
+}
+
+// ═══════════════════════════════════════
+// Button actions (no inline handlers: the page's Content-Security-Policy forbids them)
+// ═══════════════════════════════════════
+// da(): the attributes for a generated button. js/ssai-actions.js runs the named function, from the table below only,
+// with these arguments (JSON, so a value can never become code). pass 'this' or 'event' prepends the element or event.
+function da(fn, args, pass) {
+  return `data-on-click="${fn}" data-args="${esc(JSON.stringify(args || []))}"${pass ? ` data-pass="${pass}"` : ''}`;
+}
+function toggleOpen(el) { el.classList.toggle('open'); }
+function clickElement(id) { const e = document.getElementById(id); if (e) e.click(); }
+SSAI.register({ allowlistGroup, approveRemediation, clickElement, closeIdentify, identifyThreat, rejectRemediation, setFilter,
+                setHomeFindingsFilter, setHomeTab, setMode, signOut, threatActionGroup, toggleGearMenu, toggleHomeTech,
+                toggleOpen, uploadScreenshot });
+</script>
+</body>
+</html>

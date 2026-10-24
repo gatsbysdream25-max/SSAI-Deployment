@@ -1,0 +1,11 @@
+# Template: deploy/install.sh fills in @DIR@, @USER@, @PORT@ and @BIND@. Do not install or edit this file by hand.
+[Unit]
+Description=SwarmSentinel update (fetch, test, restart, roll back on failure)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=@USER@
+WorkingDirectory=@DIR@
+ExecStart=@DIR@/deploy/update.sh

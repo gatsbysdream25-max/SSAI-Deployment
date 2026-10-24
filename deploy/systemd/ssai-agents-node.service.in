@@ -1,0 +1,18 @@
+# Template: deploy/install.sh fills in @DIR@, @USER@, @PORT@ and @BIND@. Do not install or edit this file by hand.
+[Unit]
+Description=SwarmSentinel agent runner (node: reports to a hub)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+# Runs as root on purpose: the agents read /var/log/auth.log, inspect other users' connections and watch /etc/shadow.
+WorkingDirectory=@DIR@/backend
+Environment=DATA_DIR=@DIR@
+Environment=PYTHONPATH=@DIR@/backend
+EnvironmentFile=-@DIR@/.env
+ExecStart=@DIR@/swarmsentinel-env/bin/python3 agents/agent_runner.py
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

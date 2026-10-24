@@ -1,0 +1,15 @@
+# Linux-only override that gives the container real LAN visibility, so
+# NetworkScanAgent's nmap sweep and the firewall-block action actually work.
+# Docker's host networking mode is Linux-native only -- it does not expose
+# the physical LAN this way on Docker Desktop for Windows/Mac, so this file
+# is not meant to be used there.
+#
+# Usage: docker compose -f docker-compose.yml -f docker-compose.linux-host.yml up -d
+services:
+  swarmsentinel:
+    network_mode: host
+    cap_add:
+      - NET_ADMIN
+    # "ports" from the base file is a no-op under host networking (the
+    # container already shares the host's network stack directly on
+    # 0.0.0.0:5000) -- left in the base file rather than fought here.

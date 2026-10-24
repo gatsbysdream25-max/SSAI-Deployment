@@ -1,0 +1,54 @@
+name: ci
+
+# Every push and pull request: the full test suite, real-error linting, a dependency audit and a security scan.
+# The suite builds a clean environment from requirements.txt only, so a missing dependency fails here, not on a customer's machine.
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -r requirements.txt
+      - name: Test suite (each file on its own, with the no-internet guard and no secrets, exactly as the updater runs it)
+        run: python backend/tools/run_all_tests.py
+      - name: Shell syntax of the install and update scripts
+        run: for s in deploy/*.sh docker/*.sh; do bash -n "$s"; done
+      - name: Harden script tests
+        run: bash deploy/test_harden.sh
+
+  lint:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install ruff
+      # Real errors only (syntax errors, undefined names, invalid comparisons): style is not a gate.
+      - run: ruff check --select E9,F63,F7,F82 backend
+
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install pip-audit bandit
+      - name: Known-vulnerable dependencies (fails the build)
+        run: pip-audit -r requirements.txt
+      - name: Security scan of our own code (report only until a baseline of accepted findings exists)
+        run: bandit -r backend -x backend/tools -ll || true

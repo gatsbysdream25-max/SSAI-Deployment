@@ -1,0 +1,22 @@
+# Default: bridge networking, works identically on Linux/Mac/Windows Docker
+# Desktop. NetworkScanAgent and the firewall-block action can't see the real
+# LAN in this mode and log "unavailable in this environment" instead of
+# failing -- every other agent (AI consensus, log/file-integrity, disk,
+# service-watch) works fully.
+#
+# For the full feature set on a Linux host, use:
+#   docker compose -f docker-compose.yml -f docker-compose.linux-host.yml up -d
+services:
+  swarmsentinel:
+    build: .
+    image: swarmsentinel:latest
+    restart: unless-stopped
+    ports:
+      - "5000:5000"
+    volumes:
+      - ssai_data:/data
+    environment:
+      - DATA_DIR=/data
+
+volumes:
+  ssai_data:

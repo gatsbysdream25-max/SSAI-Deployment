@@ -1,0 +1,25 @@
+# Optional hardening for the agent runner (installed by deploy/harden.sh; remove with: deploy/harden.sh revert).
+# The runner is root so it can read system logs and inspect connections, and it parses untrusted input (logs, feeds,
+# model output). It does not need to load kernel modules, mount, reboot, change other users' identity, write outside its
+# own data directory or open exotic sockets, so it is not allowed to.
+[Service]
+NoNewPrivileges=yes
+# Only what the agents use: read any file (logs, /etc/shadow integrity), write the data dir, raw sockets for the LAN scan
+# and connection inspection, ptrace-style access for `ss -p`.
+CapabilityBoundingSet=CAP_DAC_OVERRIDE CAP_DAC_READ_SEARCH CAP_NET_RAW CAP_NET_ADMIN CAP_SYS_PTRACE
+ProtectSystem=strict
+ReadWritePaths=@DIR@
+PrivateTmp=yes
+ProtectHome=read-only
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictNamespaces=yes
+RestrictSUIDSGID=yes
+RestrictRealtime=yes
+LockPersonality=yes
+SystemCallArchitectures=native
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_NETLINK AF_PACKET

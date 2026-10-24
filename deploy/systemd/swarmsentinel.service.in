@@ -1,0 +1,16 @@
+# Template: deploy/install.sh fills in @DIR@, @USER@, @PORT@ and @BIND@. Do not install or edit this file by hand.
+[Unit]
+Description=SwarmSentinel API and dashboard
+After=network.target
+
+[Service]
+User=@USER@
+WorkingDirectory=@DIR@/backend
+Environment=DATA_DIR=@DIR@
+Environment=PYTHONPATH=@DIR@/backend
+ExecStart=@DIR@/swarmsentinel-env/bin/gunicorn -w 2 --threads 4 --worker-class gthread -b @BIND@:@PORT@ --timeout 60 app:app
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

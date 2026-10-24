@@ -1,0 +1,10 @@
+# Template: deploy/install.sh fills in @DIR@, @USER@, @PORT@ and @BIND@. Do not install or edit this file by hand.
+[Unit]
+Description=SwarmSentinel threat-table retention (old low/info rows; backs up first)
+
+[Service]
+Type=oneshot
+User=@USER@
+WorkingDirectory=@DIR@
+Nice=10
+ExecStart=@DIR@/swarmsentinel-env/bin/python3 @DIR@/backend/retention.py --apply --vacuum --keep-backups 7

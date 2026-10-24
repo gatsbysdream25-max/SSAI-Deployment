@@ -1,0 +1,18 @@
+# Caddy in front of the hub (see README.md). Replace the host name.
+#
+# Public name on ports 80/443: delete the `tls` line and Caddy gets a Let's Encrypt certificate by itself.
+# Internal name: use your organisation's certificate and key, or `tls internal` (Caddy's own CA; the admin PCs must trust it).
+ssai.bank.example {
+	tls /etc/ssl/ssai/ssai.bank.example.crt /etc/ssl/ssai/ssai.bank.example.key
+
+	encode gzip
+
+	reverse_proxy 127.0.0.1:5000 {
+		# Caddy sets X-Forwarded-For and X-Forwarded-Proto itself and replaces any value a client sent.
+		header_up X-Real-IP {remote_host}
+	}
+
+	log {
+		output file /var/log/caddy/ssai-access.log
+	}
+}

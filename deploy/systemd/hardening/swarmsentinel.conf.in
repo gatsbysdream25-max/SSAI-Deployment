@@ -1,0 +1,17 @@
+# Optional hardening for the web app (installed by deploy/harden.sh; remove with: deploy/harden.sh revert).
+# Deliberately NOT set: NoNewPrivileges, ProtectSystem and CapabilityBoundingSet. The dashboard's Block button runs
+# `sudo ufw`, which needs setuid and must write /etc/ufw. Removing that limit means moving firewall changes into a
+# small separate privileged helper (on the roadmap); until then the web app keeps this narrower set.
+[Service]
+PrivateTmp=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictNamespaces=yes
+RestrictRealtime=yes
+LockPersonality=yes
+SystemCallArchitectures=native
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_NETLINK

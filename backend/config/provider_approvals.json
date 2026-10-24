@@ -1,0 +1,94 @@
+{
+  "_help": [
+    "Third-party AI provider approvals. Framework and process: docs/third-party-ai/README.md.",
+    "One entry per outside service SSAI can send data to: every non-local provider in ai_models.json, plus integrations (Microsoft Copilot).",
+    "status: approved | pending | rejected. 'approved' needs every checklist item true, 'reviewed' (date) and 'reviewer'; backend/tools/test_provider_approvals.py enforces it.",
+    "A checklist item is true only once the provider has confirmed it IN WRITING (contract, DPA, published terms you have saved a copy of) and the evidence is listed in the provider's record.",
+    "Enforcement is opt-in: SSAI_REQUIRE_PROVIDER_APPROVAL=1 in .env keeps every cloud provider that is not 'approved' out of the AI panel. Turn it on for customer deployments.",
+    "This installation's own decisions go in instance/provider_approvals.json (same shape, only the entries you change; it survives updates).",
+    "Local models (Ollama on this network) never leave the network and need no entry; an Ollama endpoint on the internet is treated as cloud and is not covered by the 'ollama' entry."
+  ],
+  "checklist_items": {
+    "sla": "SLA terms: uptime, latency, support response time",
+    "data_location": "Where submitted data is processed and stored (region, sub-processors)",
+    "retention_training": "How long submitted data is kept, and whether it is used to train the provider's models",
+    "audit_rights": "Whether SSAI or the customer can get logs/evidence of how submitted data was handled",
+    "incident_response": "Who notifies whom, and how fast, if the provider has a breach",
+    "exit_terms": "What happens to submitted data when the integration ends",
+    "certifications": "Compliance certifications relevant to the customer (e.g. SOC 2 for a bank)"
+  },
+  "providers": {
+    "microsoft-copilot": {
+      "name": "Microsoft 365 Copilot (Copilot lane)", "kind": "integration", "operator": "Microsoft",
+      "record": "docs/third-party-ai/microsoft-copilot.md", "status": "pending", "reviewed": null, "reviewer": null,
+      "checklist": {"sla": false, "data_location": false, "retention_training": false, "audit_rights": false,
+                    "incident_response": false, "exit_terms": false, "certifications": false}
+    },
+    "groq": {
+      "name": "Groq", "kind": "ai-panel", "operator": "Groq, Inc.",
+      "record": "docs/third-party-ai/groq.md", "status": "pending", "reviewed": null, "reviewer": null,
+      "checklist": {"sla": false, "data_location": false, "retention_training": false, "audit_rights": false,
+                    "incident_response": false, "exit_terms": false, "certifications": false}
+    },
+    "openrouter": {
+      "name": "OpenRouter", "kind": "ai-panel", "operator": "OpenRouter, Inc.",
+      "record": "docs/third-party-ai/openrouter.md", "status": "pending", "reviewed": null, "reviewer": null,
+      "checklist": {"sla": false, "data_location": false, "retention_training": false, "audit_rights": false,
+                    "incident_response": false, "exit_terms": false, "certifications": false}
+    },
+    "cerebras": {
+      "name": "Cerebras Inference", "kind": "ai-panel", "operator": "Cerebras Systems",
+      "record": "docs/third-party-ai/cerebras.md", "status": "pending", "reviewed": null, "reviewer": null,
+      "checklist": {"sla": false, "data_location": false, "retention_training": false, "audit_rights": false,
+                    "incident_response": false, "exit_terms": false, "certifications": false}
+    },
+    "mistral": {
+      "name": "Mistral AI (cloud API)", "kind": "ai-panel", "operator": "Mistral AI",
+      "record": "docs/third-party-ai/mistral.md", "status": "pending", "reviewed": null, "reviewer": null,
+      "checklist": {"sla": false, "data_location": false, "retention_training": false, "audit_rights": false,
+                    "incident_response": false, "exit_terms": false, "certifications": false}
+    },
+    "gemini": {
+      "name": "Google Gemini API", "kind": "ai-panel", "operator": "Google",
+      "record": "docs/third-party-ai/gemini.md", "status": "pending", "reviewed": null, "reviewer": null,
+      "checklist": {"sla": false, "data_location": false, "retention_training": false, "audit_rights": false,
+                    "incident_response": false, "exit_terms": false, "certifications": false}
+    },
+    "huggingface": {
+      "name": "Hugging Face Inference Providers", "kind": "ai-panel", "operator": "Hugging Face (routes to third-party hosts)",
+      "record": "docs/third-party-ai/huggingface.md", "status": "pending", "reviewed": null, "reviewer": null,
+      "checklist": {"sla": false, "data_location": false, "retention_training": false, "audit_rights": false,
+                    "incident_response": false, "exit_terms": false, "certifications": false}
+    },
+    "together": {
+      "name": "Together AI", "kind": "ai-panel", "operator": "Together Computer, Inc.",
+      "record": "docs/third-party-ai/together.md", "status": "pending", "reviewed": null, "reviewer": null,
+      "checklist": {"sla": false, "data_location": false, "retention_training": false, "audit_rights": false,
+                    "incident_response": false, "exit_terms": false, "certifications": false}
+    },
+    "anthropic": {
+      "name": "Anthropic API", "kind": "ai-panel", "operator": "Anthropic",
+      "record": "docs/third-party-ai/anthropic.md", "status": "pending", "reviewed": null, "reviewer": null,
+      "checklist": {"sla": false, "data_location": false, "retention_training": false, "audit_rights": false,
+                    "incident_response": false, "exit_terms": false, "certifications": false}
+    },
+    "grok": {
+      "name": "xAI Grok API", "kind": "ai-panel", "operator": "xAI",
+      "record": "docs/third-party-ai/grok.md", "status": "pending", "reviewed": null, "reviewer": null,
+      "checklist": {"sla": false, "data_location": false, "retention_training": false, "audit_rights": false,
+                    "incident_response": false, "exit_terms": false, "certifications": false}
+    },
+    "openai": {
+      "name": "OpenAI API", "kind": "ai-panel", "operator": "OpenAI",
+      "record": "docs/third-party-ai/openai.md", "status": "pending", "reviewed": null, "reviewer": null,
+      "checklist": {"sla": false, "data_location": false, "retention_training": false, "audit_rights": false,
+                    "incident_response": false, "exit_terms": false, "certifications": false}
+    },
+    "kimi": {
+      "name": "Moonshot AI Kimi API", "kind": "ai-panel", "operator": "Moonshot AI",
+      "record": "docs/third-party-ai/kimi.md", "status": "pending", "reviewed": null, "reviewer": null,
+      "checklist": {"sla": false, "data_location": false, "retention_training": false, "audit_rights": false,
+                    "incident_response": false, "exit_terms": false, "certifications": false}
+    }
+  }
+}

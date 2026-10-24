@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sign in - SwarmSentinel</title>
+<style>
+  :root { --bg: #0b1220; --card: #111927; --border: #1e2d40; --text: #c8d8e8; --muted: #7c8da3; --accent: #00ff88; --err: #ef4444; }
+  @media (prefers-color-scheme: light) { :root { --bg: #f3f6fa; --card: #fff; --border: #d5dde8; --text: #1b2633; --muted: #5b6b7d; --accent: #007a45; } }
+  * { box-sizing: border-box; }
+  body { margin: 0; min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 16px;
+         background: var(--bg); color: var(--text); font: 14px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  .card { width: 100%; max-width: 380px; background: var(--card); border: 1px solid var(--border); border-radius: 10px; padding: 26px 24px; }
+  h1 { margin: 0 0 4px; font-size: 18px; letter-spacing: .04em; }
+  p { margin: 0 0 16px; color: var(--muted); font-size: 13px; }
+  label { display: block; font-size: 12px; color: var(--muted); margin-bottom: 4px; }
+  input { width: 100%; padding: 10px 12px; border-radius: 6px; border: 1px solid var(--border); background: transparent; color: var(--text); font-size: 15px; }
+  input:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
+  button { margin-top: 14px; width: 100%; padding: 10px; border-radius: 6px; border: 1px solid var(--accent); background: transparent; color: var(--accent); font-weight: 700; font-size: 14px; cursor: pointer; }
+  button:disabled { opacity: .5; cursor: default; }
+  .err { color: var(--err); font-size: 13px; min-height: 18px; margin-top: 10px; }
+  .notice { border: 1px solid var(--border); border-radius: 6px; padding: 10px 12px; font-size: 13px; margin-bottom: 14px; }
+  code { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 12px; }
+  a { color: var(--muted); font-size: 12px; }
+  a.sso { display: block; margin: 0 0 16px; padding: 10px; text-align: center; border: 1px solid var(--accent); border-radius: 6px; color: var(--accent); font-weight: 700; font-size: 14px; text-decoration: none; }
+</style>
+</head>
+<body>
+<form class="card" id="f" autocomplete="on">
+  <h1>SWARMSENTINEL</h1>
+  <p>Sign in to change settings, act on threats, or manage machines. The dashboard itself can be viewed without signing in.</p>
+  {% if sso_error %}
+  <div class="notice" role="alert">Single sign-on did not complete. Try again, or ask your administrator to check that you are on the admin list.</div>
+  {% endif %}
+  {% if sso %}
+  <a class="sso" href="/login/sso?next={{ next | urlencode }}">Sign in with your organisation account</a>
+  {% endif %}
+  {% if not sso_only %}
+  {% if not configured %}
+  <div class="notice">No admin password has been set yet. On the hub machine run <code>deploy/set-password.sh</code>, then reload this page.</div>
+  {% endif %}
+  <label for="pw">Admin password</label>
+  <input id="pw" name="password" type="password" autocomplete="current-password" {% if not sso %}autofocus {% endif %}required>
+  <button id="go" type="submit">Sign in</button>
+  {% endif %}
+  <div class="err" id="err" role="alert"></div>
+  <a href="/dashboard">View the dashboard without signing in</a>
+</form>
+<script nonce="{{ csp_nonce }}">
+const NEXT = {{ next | tojson }};
+document.getElementById('f').addEventListener('submit', async (ev) => {
+  ev.preventDefault();
+  if (!document.getElementById('pw')) return;       // single sign-on only: there is no password form to send
+  const go = document.getElementById('go'), err = document.getElementById('err');
+  go.disabled = true; err.textContent = '';
+  try {
+    const res = await fetch('/login', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+                                        body: JSON.stringify({ password: document.getElementById('pw').value, next: NEXT }) });
+    const data = await res.json().catch(() => ({}));
+    if (res.ok && data.ok) { window.location.href = data.next || '/dashboard'; return; }
+    err.textContent = data.error || 'Sign-in failed';
+  } catch (e) {
+    err.textContent = 'Could not reach the server';
+  }
+  go.disabled = false;
+  document.getElementById('pw').select();
+});
+</script>
+</body>
+</html>

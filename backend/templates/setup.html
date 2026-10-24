@@ -1,0 +1,473 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SwarmSentinel — AI Provider Setup</title>
+<style>
+  :root {
+    --bg:        #0a0e1a;
+    --panel:     #0f1520;
+    --border:    #1e2d40;
+    --cyan:      #00d4ff;
+    --green:     #00ff88;
+    --yellow:    #ffd700;
+    --red:       #ff4444;
+    --text:      #c8d8e8;
+    --text-muted:#5a7080;
+    --card-bg:   #111927;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: 'Courier New', monospace;
+    font-size: 13px;
+    min-height: 100vh;
+  }
+
+  /* ── Header ── */
+  .header {
+    background: var(--panel);
+    border-bottom: 1px solid var(--border);
+    padding: 14px 28px;
+    display: flex;
+    align-items: center;
+    gap: 18px;
+  }
+  .header-logo { font-size: 18px; font-weight: bold; color: var(--cyan); letter-spacing: 2px; }
+  .header-sub  { color: var(--text-muted); font-size: 11px; }
+  .header-back {
+    margin-left: auto;
+    color: var(--cyan);
+    text-decoration: none;
+    font-size: 12px;
+    border: 1px solid var(--border);
+    padding: 5px 14px;
+    border-radius: 4px;
+    transition: border-color .2s;
+  }
+  .header-back:hover { border-color: var(--cyan); }
+
+  /* ── Summary bar ── */
+  .summary-bar {
+    background: var(--panel);
+    border-bottom: 1px solid var(--border);
+    padding: 10px 28px;
+    display: flex;
+    gap: 28px;
+    align-items: center;
+  }
+  .summary-item { display: flex; align-items: center; gap: 7px; font-size: 12px; }
+  .summary-num  { font-size: 20px; font-weight: bold; color: var(--cyan); }
+  .summary-lbl  { color: var(--text-muted); }
+  .reload-btn {
+    margin-left: auto;
+    background: transparent;
+    border: 1px solid var(--border);
+    color: var(--text-muted);
+    padding: 5px 14px;
+    border-radius: 4px;
+    cursor: pointer;
+    font-family: inherit;
+    font-size: 11px;
+    transition: all .2s;
+  }
+  .reload-btn:hover { border-color: var(--cyan); color: var(--cyan); }
+
+  /* ── Main layout ── */
+  .main { padding: 24px 28px; max-width: 1100px; margin: 0 auto; }
+
+  .section-title {
+    font-size: 11px;
+    color: var(--text-muted);
+    letter-spacing: 2px;
+    text-transform: uppercase;
+    margin-bottom: 14px;
+    padding-bottom: 6px;
+    border-bottom: 1px solid var(--border);
+  }
+
+  /* ── Provider grid ── */
+  .provider-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+    gap: 14px;
+    margin-bottom: 36px;
+  }
+
+  .provider-card {
+    background: var(--card-bg);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    overflow: hidden;
+    transition: border-color .2s;
+  }
+  .provider-card.active { border-color: #00ff8840; }
+  .provider-card:hover  { border-color: #1e3d55; }
+
+  .card-header {
+    padding: 14px 16px 10px;
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+    border-bottom: 1px solid var(--border);
+  }
+  .card-icon   { font-size: 22px; line-height: 1; padding-top: 2px; }
+  .card-title-block { flex: 1; }
+  .card-name   { font-size: 13px; font-weight: bold; color: #dde8f0; }
+  .card-specialty { font-size: 10px; color: var(--cyan); letter-spacing: 1px; text-transform: uppercase; margin-top: 2px; }
+  .card-desc   { font-size: 11px; color: var(--text-muted); margin-top: 4px; line-height: 1.4; }
+  .status-badge {
+    display: flex; align-items: center; gap: 5px;
+    font-size: 10px; padding: 3px 8px; border-radius: 10px; white-space: nowrap;
+    font-weight: bold; letter-spacing: .5px;
+  }
+  .status-badge.active   { background: #00ff8815; color: var(--green); border: 1px solid #00ff8830; }
+  .status-badge.inactive { background: #ff444410; color: var(--text-muted); border: 1px solid var(--border); }
+  .status-dot { width: 6px; height: 6px; border-radius: 50%; }
+  .status-badge.active   .status-dot { background: var(--green); box-shadow: 0 0 6px var(--green); }
+  .status-badge.inactive .status-dot { background: var(--text-muted); }
+
+  .card-meta {
+    padding: 8px 16px;
+    display: flex;
+    gap: 14px;
+    border-bottom: 1px solid var(--border);
+  }
+  .meta-item { display: flex; flex-direction: column; gap: 2px; }
+  .meta-lbl  { font-size: 9px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 1px; }
+  .meta-val  { font-size: 11px; color: var(--text); }
+  .cost-free { color: var(--green); }
+  .cost-paid { color: var(--yellow); }
+  .cost-credit { color: #f0a030; }
+
+  .card-body { padding: 12px 16px; }
+
+  /* Active state body */
+  .card-active-body { display: flex; align-items: center; gap: 8px; }
+  .active-model-lbl { font-size: 11px; color: var(--text-muted); }
+  .active-model-val { font-size: 11px; color: var(--cyan); font-family: monospace; }
+  .deactivate-btn {
+    margin-left: auto; background: transparent; border: 1px solid var(--border);
+    color: var(--text-muted); padding: 4px 10px; border-radius: 4px;
+    cursor: pointer; font-family: inherit; font-size: 10px; transition: all .2s;
+  }
+  .deactivate-btn:hover { border-color: var(--red); color: var(--red); }
+
+  /* Inactive state body */
+  .activate-row { display: flex; gap: 8px; align-items: stretch; }
+  .key-input {
+    flex: 1; background: #0a0e1a; border: 1px solid var(--border);
+    color: var(--text); padding: 7px 10px; border-radius: 4px;
+    font-family: monospace; font-size: 11px; outline: none;
+    transition: border-color .2s;
+  }
+  .key-input:focus { border-color: var(--cyan); }
+  .key-input::placeholder { color: var(--text-muted); }
+
+  .get-key-btn {
+    background: transparent; border: 1px solid var(--border);
+    color: var(--cyan); padding: 7px 12px; border-radius: 4px;
+    cursor: pointer; font-family: inherit; font-size: 11px;
+    text-decoration: none; display: flex; align-items: center; gap: 5px;
+    white-space: nowrap; transition: all .2s;
+  }
+  .get-key-btn:hover { border-color: var(--cyan); background: #00d4ff10; }
+
+  .activate-btn {
+    background: #00ff8810; border: 1px solid #00ff8840;
+    color: var(--green); padding: 7px 14px; border-radius: 4px;
+    cursor: pointer; font-family: inherit; font-size: 11px;
+    font-weight: bold; transition: all .2s; white-space: nowrap;
+  }
+  .activate-btn:hover  { background: #00ff8820; border-color: var(--green); }
+  .activate-btn:disabled { opacity: .4; cursor: default; }
+
+  .card-status-msg { font-size: 10px; margin-top: 7px; min-height: 14px; }
+  .card-status-msg.ok  { color: var(--green); }
+  .card-status-msg.err { color: var(--red); }
+
+  .focus-note {
+    font-size: 10px; color: var(--text-muted); margin-top: 8px;
+    line-height: 1.5; border-top: 1px solid var(--border); padding-top: 8px;
+  }
+
+  /* No-key providers (Ollama) */
+  .no-key-body { font-size: 11px; color: var(--text-muted); }
+  .no-key-body a { color: var(--cyan); }
+
+  /* ── Toast ── */
+  #toast {
+    position: fixed; bottom: 24px; right: 24px;
+    background: var(--panel); border: 1px solid var(--green);
+    color: var(--green); padding: 10px 18px; border-radius: 6px;
+    font-size: 12px; opacity: 0; pointer-events: none;
+    transition: opacity .3s; z-index: 999;
+  }
+  #toast.show { opacity: 1; }
+  #toast.err  { border-color: var(--red); color: var(--red); }
+</style>
+</head>
+<body>
+
+<div class="header">
+  <div class="header-logo">⬡ SWARMSENTINEL</div>
+  <div class="header-sub">AI Provider Setup Wizard</div>
+  <a href="/dashboard" class="header-back">← Back to Dashboard</a>
+</div>
+
+<div id="first-run-banner" style="display:none;margin:14px 16px 0;padding:14px 16px;background:var(--surface,#111520);border:1px solid var(--accent,#00d4ff);border-radius:8px;">
+  <div style="font-weight:700;margin-bottom:6px;">👋 Welcome — this looks like a fresh install</div>
+  <div style="font-size:13px;color:var(--text-muted,#94a3b8);line-height:1.5;">
+    A one-time API key was generated for this install so the dashboard's buttons can
+    authenticate to its own backend. You don't need to do anything with it right now —
+    it's already wired in. Add at least one AI provider below to get started.
+  </div>
+</div>
+
+<div class="summary-bar">
+  <div class="summary-item">
+    <span class="summary-num" id="active-count">—</span>
+    <span class="summary-lbl">Active Providers</span>
+  </div>
+  <div class="summary-item">
+    <span class="summary-num" id="free-count" style="color:var(--green)">—</span>
+    <span class="summary-lbl">Free Tier</span>
+  </div>
+  <div class="summary-item">
+    <span class="summary-num" id="total-count" style="color:var(--text-muted)">—</span>
+    <span class="summary-lbl">Total Available</span>
+  </div>
+  <button class="reload-btn" data-on-click="reloadSwarm">⟳ Reload Swarm</button>
+</div>
+
+<div class="main">
+
+  <div id="free-section">
+    <div class="section-title">Free providers — no cost, activate with a free account</div>
+    <div class="provider-grid" id="free-grid"></div>
+  </div>
+
+  <div id="paid-section">
+    <div class="section-title">Optional providers — small free quota, credits or paid. Off by default: switch one on when you want it in the panel</div>
+    <div class="provider-grid" id="paid-grid"></div>
+  </div>
+
+</div>
+
+<div id="toast"></div>
+
+<script src="/static/ssai-actions.js"></script>
+<script nonce="{{ csp_nonce }}">
+const CSRF_TOKEN = {{ csrf_token | tojson }};   // the API key is never sent to a browser
+const FREE_TIERS = ['free', 'local'];
+
+let _registry = [];
+
+async function loadProviders() {
+  const res  = await fetch('/api/setup/providers');
+  _registry  = await res.json();
+
+  const freeGrid = document.getElementById('free-grid');
+  const paidGrid = document.getElementById('paid-grid');
+  freeGrid.innerHTML = '';
+  paidGrid.innerHTML = '';
+
+  let active = 0, freeCount = 0;
+
+  for (const p of _registry) {
+    if (p.active && p.enabled) active++;
+    const isFree = FREE_TIERS.includes(p.tier);
+    if (isFree) freeCount++;
+    const card = buildCard(p);
+    (isFree ? freeGrid : paidGrid).appendChild(card);
+  }
+
+  document.getElementById('active-count').textContent = active;
+  document.getElementById('free-count').textContent   = freeCount;
+  document.getElementById('total-count').textContent  = _registry.length;
+
+  // Zero active providers = nothing has ever been configured on this
+  // install yet — the simplest true "first run" signal, no extra backend
+  // state needed. Disappears the moment the first key is added.
+  document.getElementById('first-run-banner').style.display = active === 0 ? 'block' : 'none';
+}
+
+function buildCard(p) {
+  const div = document.createElement('div');
+  div.className = `provider-card${p.active ? ' active' : ''}`;
+  div.id = `card-${p.id}`;
+
+  const costClass = p.cost === 'Free' ? 'cost-free'
+                  : p.cost === 'Paid' ? 'cost-paid'
+                  : 'cost-credit';
+
+  const statusBadge = (p.active && p.enabled && p.resting)
+    ? `<span class="status-badge inactive" title="Out of credits or quota: not voting. Checked again automatically."><span class="status-dot"></span>RESTING (${esc(p.resting.kind)})</span>`
+    : (p.active && p.enabled)
+    ? `<span class="status-badge active"><span class="status-dot"></span>ACTIVE</span>`
+    : (p.active
+        ? `<span class="status-badge inactive"><span class="status-dot"></span>OFF (optional)</span>`
+        : `<span class="status-badge inactive"><span class="status-dot"></span>INACTIVE</span>`);
+  const toggleBtn = p.active
+    ? (p.enabled
+        ? `<button class="deactivate-btn" data-on-click="toggleProvider" data-args="${esc(JSON.stringify([p.id, false]))}">Switch off</button>`
+        : `<button class="activate-btn" data-on-click="toggleProvider" data-args="${esc(JSON.stringify([p.id, true]))}">Switch on</button>`)
+    : '';
+
+  let bodyHtml = '';
+  if (!p.env_key) {
+    // Ollama / no-key providers
+    bodyHtml = `<div class="no-key-body">
+      ${p.active
+        ? `Running locally — <strong style="color:var(--green)">detected automatically</strong> ${toggleBtn}`
+        : `Not detected. <a href="${esc(p.signup_url)}" target="_blank">Install Ollama →</a>`
+      }
+    </div>`;
+  } else if (p.active) {
+    bodyHtml = `<div class="card-active-body">
+      <div>
+        <div class="meta-lbl">Model</div>
+        <div class="active-model-val">${esc(p.model)}</div>
+      </div>
+      ${toggleBtn}
+      <button class="deactivate-btn" data-on-click="deactivateProvider" data-args="${esc(JSON.stringify([p.id, p.env_key]))}">Remove Key</button>
+    </div>`;
+  } else {
+    bodyHtml = `
+      <div class="activate-row">
+        <input class="key-input" id="key-${p.id}"
+               placeholder="Paste ${esc(p.env_key)} here..."
+               type="password"
+               data-on-keydown="activateProvider" data-key="Enter" data-args="${esc(JSON.stringify([p.id]))}">
+        <a class="get-key-btn" href="${esc(p.signup_url)}" target="_blank">Get Free Key →</a>
+        <button class="activate-btn" data-on-click="activateProvider" data-args="${esc(JSON.stringify([p.id]))}">Activate</button>
+      </div>
+      <div class="card-status-msg" id="msg-${p.id}"></div>`;
+  }
+
+  div.innerHTML = `
+    <div class="card-header">
+      <div class="card-icon">${p.icon}</div>
+      <div class="card-title-block">
+        <div class="card-name">${esc(p.name)}</div>
+        <div class="card-specialty">${esc(p.specialty)}</div>
+        <div class="card-desc">${esc(p.description)}</div>
+      </div>
+      ${statusBadge}
+    </div>
+    <div class="card-meta">
+      <div class="meta-item">
+        <div class="meta-lbl">Model</div>
+        <div class="meta-val">${esc(p.model)}</div>
+      </div>
+      <div class="meta-item">
+        <div class="meta-lbl">Rate Limit</div>
+        <div class="meta-val">${esc(p.rate_limit)}</div>
+      </div>
+      <div class="meta-item">
+        <div class="meta-lbl">Cost</div>
+        <div class="meta-val ${costClass}">${esc(p.cost)}</div>
+      </div>
+    </div>
+    <div class="card-body">
+      ${bodyHtml}
+      ${p.notes ? `<div class="focus-note"><strong>${esc(p.tier)}${p.verified ? ' · measured' : ' · not benchmarked'}:</strong> ${esc(p.notes)}</div>` : ''}
+      <div class="focus-note">${esc(p.focus)}</div>
+    </div>`;
+
+  return div;
+}
+
+async function toggleProvider(id, enabled) {
+  try {
+    const res = await fetch('/api/setup/enable', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': CSRF_TOKEN },
+      body: JSON.stringify({ provider_id: id, enabled })
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || res.statusText);
+    showToast(`${id} ${enabled ? 'switched on' : 'switched off'} — takes effect on the next analysis`);
+    loadProviders();
+  } catch (e) {
+    showToast('Could not change ' + id + ': ' + e.message, true);
+  }
+}
+
+async function activateProvider(id) {
+  const input = document.getElementById(`key-${id}`);
+  const msg   = document.getElementById(`msg-${id}`);
+  const key   = input ? input.value.trim() : '';
+  if (!key) { showMsg(msg, 'Paste your API key first', true); return; }
+
+  showMsg(msg, 'Activating…', false);
+  try {
+    const res  = await fetch('/api/setup/activate', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json', 'X-CSRF-Token': CSRF_TOKEN},
+      body: JSON.stringify({provider_id: id, api_key: key}),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'Unknown error');
+    showToast(`${id} activated — ${data.active_count} providers now active`);
+    await loadProviders();
+  } catch (e) {
+    showMsg(msg, `Error: ${e.message}`, true);
+  }
+}
+
+async function deactivateProvider(id, envKey) {
+  if (!confirm(`Remove the API key for ${id}? This clears it from .env and reloads the swarm.`)) return;
+  try {
+    const res  = await fetch('/api/setup/activate', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json', 'X-CSRF-Token': CSRF_TOKEN},
+      body: JSON.stringify({provider_id: id, api_key: ''}),
+    });
+    const data = await res.json();
+    showToast(`${id} deactivated — ${data.active_count} providers active`);
+    await loadProviders();
+  } catch (e) {
+    showToast(`Error: ${e.message}`, true);
+  }
+}
+
+async function reloadSwarm() {
+  try {
+    const res  = await fetch('/api/setup/reload', {method: 'POST', headers: {'X-CSRF-Token': CSRF_TOKEN}});
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);   // was: "undefined providers active" on a 401
+    showToast(`Swarm reloaded — ${data.active_count} providers active`);
+    await loadProviders();
+  } catch (e) {
+    showToast(`Reload failed: ${e.message}`, true);
+  }
+}
+
+function showMsg(el, text, isErr) {
+  if (!el) return;
+  el.textContent = text;
+  el.className = `card-status-msg ${isErr ? 'err' : 'ok'}`;
+}
+
+function showToast(msg, isErr = false) {
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.className = `show${isErr ? ' err' : ''}`;
+  setTimeout(() => { t.className = ''; }, 3500);
+}
+
+function esc(s) {
+  if (!s) return '';
+  return String(s)
+    .replace(/&/g,'&amp;').replace(/</g,'&lt;')
+    .replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+SSAI.register({ activateProvider, deactivateProvider, reloadSwarm, toggleProvider });
+loadProviders();
+</script>
+</body>
+</html>

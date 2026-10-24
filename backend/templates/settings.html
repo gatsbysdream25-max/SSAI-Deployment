@@ -1,0 +1,439 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SwarmSentinel — AI Routing Settings</title>
+<style>
+  :root {
+    --bg:        #0a0e1a;
+    --panel:     #0f1520;
+    --border:    #1e2d40;
+    --cyan:      #00d4ff;
+    --green:     #00ff88;
+    --yellow:    #ffd700;
+    --red:       #ff4444;
+    --text:      #c8d8e8;
+    --text-muted:#5a7080;
+    --card-bg:   #111927;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: 'Courier New', monospace;
+    font-size: 13px;
+    min-height: 100vh;
+  }
+  .header {
+    background: var(--panel);
+    border-bottom: 1px solid var(--border);
+    padding: 14px 28px;
+    display: flex;
+    align-items: center;
+    gap: 18px;
+  }
+  .header-logo { font-size: 18px; font-weight: bold; color: var(--cyan); letter-spacing: 2px; }
+  .header-sub  { color: var(--text-muted); font-size: 11px; }
+  .header-back {
+    margin-left: auto;
+    color: var(--cyan);
+    text-decoration: none;
+    font-size: 12px;
+    border: 1px solid var(--border);
+    padding: 5px 14px;
+    border-radius: 4px;
+  }
+  .header-back:hover { border-color: var(--cyan); }
+
+  .content { max-width: 720px; margin: 0 auto; padding: 28px; }
+  .section-title { font-size: 13px; color: var(--text-muted); margin-bottom: 14px; letter-spacing: .5px; }
+
+  .agent-card {
+    background: var(--card-bg);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 16px 18px;
+    margin-bottom: 14px;
+  }
+  .agent-hdr { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; }
+  .agent-name { font-size: 14px; font-weight: bold; color: var(--cyan); }
+  .agent-sev { font-size: 10px; color: var(--text-muted); border: 1px solid var(--border); padding: 2px 8px; border-radius: 12px; text-transform: uppercase; }
+
+  .field-row { display: flex; gap: 10px; margin-bottom: 8px; }
+  .field-row label { width: 90px; font-size: 11px; color: var(--text-muted); align-self: center; }
+  .field-row input {
+    flex: 1;
+    background: #0a0e1a;
+    border: 1px solid var(--border);
+    color: var(--text);
+    padding: 7px 10px;
+    border-radius: 4px;
+    font-family: inherit;
+    font-size: 12px;
+  }
+  .field-row input:focus { outline: none; border-color: var(--cyan); }
+
+  .save-row { display: flex; justify-content: flex-end; margin-top: 20px; }
+  .save-btn {
+    background: #00ff8820;
+    border: 1px solid var(--green);
+    color: var(--green);
+    padding: 9px 22px;
+    border-radius: 4px;
+    font-family: inherit;
+    font-size: 13px;
+    cursor: pointer;
+  }
+  .save-btn:hover { background: #00ff8835; }
+  .save-btn:disabled { opacity: .4; cursor: default; }
+
+  .toast {
+    position: fixed; bottom: 24px; right: 24px;
+    background: var(--card-bg); border: 1px solid var(--green); color: var(--green);
+    padding: 12px 20px; border-radius: 6px; font-size: 12px;
+    opacity: 0; transform: translateY(10px); transition: all .25s;
+    pointer-events: none;
+  }
+  .toast.show { opacity: 1; transform: translateY(0); }
+  .toast.err { border-color: var(--red); color: var(--red); }
+
+  .hint { font-size: 10px; color: var(--text-muted); margin-top: 4px; }
+</style>
+</head>
+<body>
+
+<div class="header">
+  <div class="header-logo">🛡 SWARMSENTINEL</div>
+  <div class="header-sub">AI Routing Settings</div>
+  <a class="header-back" href="/dashboard">← Back to Dashboard</a>
+</div>
+
+<div class="content">
+  <div class="section-title">Protection level — what this machine can honestly watch, measured from its memory, disk, tools and AI models.</div>
+  <div class="agent-card" id="capability-card"><div class="hint">Measuring…</div></div>
+  <div class="agent-card" id="update-card" style="display:none"></div>
+
+  <div class="section-title" style="margin-top:34px">Admin account — you are signed in. Change the password here; other signed-in sessions end when you do.</div>
+  <div class="agent-card">
+    <div class="agent-hdr"><div class="agent-name">Admin password</div></div>
+    <input type="password" id="pw-current" placeholder="Current password" autocomplete="current-password" style="margin-bottom:8px">
+    <input type="password" id="pw-new" placeholder="New password (at least 12 characters)" autocomplete="new-password" style="margin-bottom:8px">
+    <input type="password" id="pw-new2" placeholder="New password again" autocomplete="new-password" style="margin-bottom:10px">
+    <button class="save-btn" data-on-click="changePassword">Change password</button>
+    <button class="save-btn" data-on-click="signOut">Sign out</button>
+  </div>
+
+  <div class="section-title" style="margin-top:34px">Machines — other computers reporting to this hub. Each has its own credential, which you can revoke at any time. To add one, create a single-use code and run the command shown on that machine.</div>
+  <div id="node-list"></div>
+  <div class="agent-card">
+    <div class="agent-hdr"><div class="agent-name">Add a machine</div></div>
+    <div class="hint" style="margin:6px 0 10px">Optional name for the machine (letters, digits, dot, dash). Leave empty to let it use its hostname.</div>
+    <input type="text" id="node-name" placeholder="e.g. web-server-1" style="margin-bottom:10px">
+    <button class="save-btn" data-on-click="addMachine">Create enrollment code</button>
+    <div id="node-code"></div>
+  </div>
+
+  <div class="section-title" style="margin-top:34px">Agents — what runs on this node. Cheap detectors are on; optional agents (local-LLM analyzers) are off by default and can be switched on here. Changes apply within about 30 seconds, no restart.</div>
+  <div id="agent-list"></div>
+
+  <div class="section-title" style="margin-top:34px">AI models and API keys — every voice that can join the panel: switch it on or off, paste or replace its key. A model that runs out of credits or free quota rests by itself and returns when it answers again; your on/off choice is never changed for you.</div>
+  <style>
+    /* Two models per row so the list is compact; one per row on a narrow screen. */
+    #model-list { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+    #model-list .agent-card { margin: 0; }
+    #model-list .field-row input { min-width: 0; flex: 1; }
+    @media (max-width: 760px) { #model-list { grid-template-columns: 1fr; } }
+  </style>
+  <div id="model-list"></div>
+
+  <div class="section-title" style="margin-top:34px">AI routing for the local-LLM analyzer agents — only used while those agents are switched on. Which AI model handles which severity tier — edits write to the shared .env and restart the agent runner.</div>
+  <div id="agent-cards"></div>
+  <div class="save-row">
+    <button class="save-btn" id="save-btn" data-on-click="saveRouting">Save &amp; Restart Agents</button>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script src="/static/ssai-actions.js"></script>
+<script nonce="{{ csp_nonce }}">
+const CSRF_TOKEN = {{ csrf_token | tojson }};   // the API key is never sent to a browser
+
+const AGENT_LABELS = {
+  ollama:     'OllamaAnalyzerAgent',
+  hermes:     'HermesAnalyzerAgent',
+  watchtower: 'WatchtowerAnalyzerAgent',
+};
+
+let current = {};
+
+// Machine names and hostnames come from the machines themselves, so everything shown is escaped.
+const escH = v => String(v === undefined || v === null ? '' : v).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+
+async function loadNodes() {
+  const res = await fetch('/api/nodes');
+  const nodes = await res.json();
+  document.getElementById('node-list').innerHTML = nodes.map(n => `
+    <div class="agent-card">
+      <div class="agent-hdr">
+        <div class="agent-name">${escH(n.node_id)}</div>
+        <div class="agent-sev">${escH(n.platform || '')} · credential: ${escH(n.credential)} · ${escH(n.agent_count)} agents · last seen ${escH(n.last_seen ? new Date(n.last_seen).toLocaleString() : 'never')}</div>
+      </div>
+      ${n.credential === 'none' ? '<div class="hint" style="margin:6px 0">No node credential: this is the hub itself or an entry from an older version.</div>' : ''}
+      <div style="margin-top:8px">
+        ${n.credential === 'active' ? `<button class="save-btn" data-node="${escH(n.node_id)}" data-on-click="revokeNode" data-args="${escH(JSON.stringify([n.node_id]))}">Revoke credential</button>` : ''}
+        <button class="save-btn" data-node="${escH(n.node_id)}" data-on-click="deleteNode" data-args="${escH(JSON.stringify([n.node_id]))}">Remove</button>
+      </div>
+    </div>`).join('') || '<div class="hint">No machines yet.</div>';
+}
+
+async function changePassword() {
+  const cur = document.getElementById('pw-current').value, n1 = document.getElementById('pw-new').value, n2 = document.getElementById('pw-new2').value;
+  if (n1 !== n2) { showToast('The two new passwords do not match', false); return; }
+  try {
+    await nodeCall('POST', '/api/admin/password', { current: cur, new: n1 });
+    ['pw-current', 'pw-new', 'pw-new2'].forEach(id => document.getElementById(id).value = '');
+    showToast('Password changed', true);
+  } catch (e) { showToast(e.message, false); }
+}
+
+async function signOut() {
+  try { await fetch('/logout', { method: 'POST', headers: { 'X-CSRF-Token': CSRF_TOKEN } }); } catch (e) {}
+  window.location.href = '/login';
+}
+
+async function nodeCall(method, url, body) {
+  const res = await fetch(url, {
+    method,
+    headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': CSRF_TOKEN },
+    body: body ? JSON.stringify(body) : undefined,
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || res.statusText);
+  return data;
+}
+
+async function addMachine() {
+  const name = document.getElementById('node-name').value.trim();
+  try {
+    const d = await nodeCall('POST', '/api/nodes/enrollment-codes', name ? { node_id: name } : {});
+    const cmd = `sudo deploy/install.sh --role node --hub-url ${location.origin} --enroll-code ${d.code}`;
+    document.getElementById('node-code').innerHTML = `
+      <div class="hint" style="margin:12px 0 4px">Single use, expires in ${escH(d.ttl_minutes)} minutes${d.node_id ? `, bound to the name <b>${escH(d.node_id)}</b>` : ''}. On the new machine, after cloning the repository:</div>
+      <pre style="white-space:pre-wrap;word-break:break-all;background:#0000002e;padding:8px;border-radius:6px">${escH(cmd)}</pre>`;
+  } catch (e) {
+    showToast('Could not create a code: ' + e.message, false);
+  }
+}
+
+async function revokeNode(id) {
+  if (!confirm(`Revoke the credential of "${id}"? It stops reporting immediately. Its history is kept, and you can enroll it again with a new code.`)) return;
+  try { await nodeCall('POST', `/api/nodes/${encodeURIComponent(id)}/revoke`); showToast(`${id} revoked`, true); loadNodes(); }
+  catch (e) { showToast('Could not revoke: ' + e.message, false); }
+}
+
+async function deleteNode(id) {
+  if (!confirm(`Remove "${id}" from this list? Its credential (if any) stops working. Threats it reported are kept.`)) return;
+  try { await nodeCall('DELETE', `/api/nodes/${encodeURIComponent(id)}`); showToast(`${id} removed`, true); loadNodes(); }
+  catch (e) { showToast('Could not remove: ' + e.message, false); }
+}
+
+let agents = [];
+async function loadAgents() {
+  const res = await fetch('/api/settings/agents');
+  agents = await res.json();
+  document.getElementById('agent-list').innerHTML = agents.map(a => `
+    <div class="agent-card">
+      <div class="agent-hdr">
+        <div class="agent-name">${escH(a.name)}</div>
+        <div class="agent-sev">${escH(a.tier)} · ${a.enabled ? (a.status === 'active' ? 'running' : escH(a.status)) : 'off'} · ${escH(a.findings_30d)} findings / 30 days</div>
+      </div>
+      <div class="hint" style="margin:6px 0 10px">${escH(a.notes)}</div>
+      <button class="save-btn" data-on-click="toggleAgent" data-args="${escH(JSON.stringify([a.name, !a.enabled]))}">${a.enabled ? 'Switch off' : 'Switch on'}</button>
+    </div>`).join('');
+}
+
+async function toggleAgent(name, enabled) {
+  try {
+    const res = await fetch('/api/settings/agents', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': CSRF_TOKEN },
+      body: JSON.stringify({ agent: name, enabled }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || res.statusText);
+    showToast(`${name} ${enabled ? 'switched on' : 'switched off'} — applies within about 30 seconds`, true);
+    loadAgents();
+  } catch (e) {
+    showToast('Could not change ' + name + ': ' + e.message, false);
+  }
+}
+
+async function loadRouting() {
+  const res = await fetch('/api/settings/ai_routing');
+  current = await res.json();
+  render();
+}
+
+function render() {
+  const container = document.getElementById('agent-cards');
+  container.innerHTML = Object.entries(current).map(([key, cfg]) => `
+    <div class="agent-card">
+      <div class="agent-hdr">
+        <div class="agent-name">${escH(AGENT_LABELS[key] || key)}</div>
+        <div class="agent-sev">severity: ${escH(cfg.severity)}</div>
+      </div>
+      <div class="field-row">
+        <label>Endpoint URL</label>
+        <input type="text" id="${key}-url" value="${escH(cfg.url)}" placeholder="http://localhost:11434">
+      </div>
+      <div class="field-row">
+        <label>Model</label>
+        <input type="text" id="${key}-model" value="${escH(cfg.model)}" placeholder="llama3">
+      </div>
+      <div class="hint">Any Ollama-compatible endpoint and a model name it serves (for example llama3, mistral, phi3).</div>
+    </div>
+  `).join('');
+}
+
+async function saveRouting() {
+  const btn = document.getElementById('save-btn');
+  btn.disabled = true;
+  btn.textContent = 'Saving…';
+
+  const payload = {};
+  for (const key of Object.keys(current)) {
+    payload[key] = {
+      url: document.getElementById(`${key}-url`).value.trim(),
+      model: document.getElementById(`${key}-model`).value.trim(),
+    };
+  }
+
+  try {
+    const res = await fetch('/api/settings/ai_routing', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': CSRF_TOKEN },
+      body: JSON.stringify(payload),
+    });
+    const data = await res.json();
+    if (data.ok) {
+      showToast(data.restarted ? 'Saved — agent runner restarted' : 'Saved, but restart failed — check manually', data.restarted);
+    } else {
+      showToast('Save failed', false);
+    }
+  } catch (e) {
+    showToast('Request failed — is the API reachable?', false);
+  }
+
+  btn.disabled = false;
+  btn.textContent = 'Save & Restart Agents';
+}
+
+let models = [];
+async function loadModels() {
+  const res = await fetch('/api/setup/providers');
+  if (!res.ok) { document.getElementById('model-list').innerHTML = '<div class="hint">Could not load the model list.</div>'; return; }
+  models = await res.json();
+  document.getElementById('model-list').innerHTML = models.map(modelCard).join('');
+}
+
+function modelState(m) {
+  if (!m.enabled) return 'off';
+  if (m.resting) return 'resting';
+  return m.active ? 'on the panel' : 'on, but no key';
+}
+
+function modelCard(m) {
+  const id = escH(m.id), arg = escH(JSON.stringify([m.id]));
+  const rest = m.resting ? `<div class="hint" style="margin:6px 0;color:var(--yellow,#f5c542)">Resting since ${escH(new Date(m.resting.since).toLocaleString())}: ${escH(m.resting.kind)}. Next automatic check ${escH(new Date(m.resting.next_check).toLocaleString())}. <button class="save-btn" data-on-click="recheckModel" data-args="${arg}">Check now</button></div>` : '';
+  const keyRow = m.env_key ? `<div class="field-row"><label>API key</label><input type="password" id="key-${id}" placeholder="${m.active ? 'saved (paste to replace)' : 'paste key'}" autocomplete="off"><button class="save-btn" data-on-click="saveModelKey" data-args="${arg}">Save key</button></div>` : '';
+  const link = m.signup_url ? ` · <a href="${escH(m.signup_url)}" target="_blank" rel="noopener">get a key</a>` : '';
+  return `<div class="agent-card">
+    <div class="agent-hdr"><div class="agent-name">${escH(m.icon || '')} ${escH(m.name)}</div>
+      <div class="agent-sev">${escH(m.tier)} · ${escH(m.model || '')} · ${escH(modelState(m))}</div></div>
+    <div class="hint" style="margin:6px 0">${escH(m.notes || m.description || '')}${link}</div>
+    ${rest}${keyRow}
+    <button class="save-btn" data-on-click="toggleModel" data-args="${escH(JSON.stringify([m.id, !m.enabled]))}">${m.enabled ? 'Switch off' : 'Switch on'}</button>
+  </div>`;
+}
+
+async function toggleModel(id, enabled) {
+  try {
+    await nodeCall('POST', '/api/setup/enable', { provider_id: id, enabled });
+    showToast(`${id} ${enabled ? 'switched on' : 'switched off'}`, true);
+    loadModels();
+  } catch (e) { showToast('Could not change ' + id + ': ' + e.message, false); }
+}
+
+async function saveModelKey(id) {
+  const box = document.getElementById('key-' + id);
+  const key = box ? box.value.trim() : '';
+  if (!key) { showToast('Paste a key first', false); return; }
+  try {
+    await nodeCall('POST', '/api/setup/activate', { provider_id: id, api_key: key });
+    box.value = '';
+    showToast('Key saved for ' + id, true);
+    loadModels();
+  } catch (e) { showToast('Could not save the key: ' + e.message, false); }
+}
+
+async function recheckModel(id) {
+  try {
+    const r = await nodeCall('POST', '/api/ai/recheck', { provider_id: id });
+    showToast(r.working ? id + ' answers again: back on the panel' : id + ' is still out: ' + r.detail, r.working);
+    loadModels();
+  } catch (e) { showToast('Check failed: ' + e.message, false); }
+}
+
+function showToast(msg, ok) {
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.className = 'toast show' + (ok ? '' : ' err');
+  setTimeout(() => { t.className = 'toast'; }, 3500);
+}
+
+loadRouting();
+async function loadCapability() {
+  const card = document.getElementById('capability-card');
+  try {
+    const res = await fetch('/api/status/capability');
+    if (!res.ok) throw new Error(res.statusText);
+    const c = await res.json();
+    const can = c.can.map(t => `<li>${escH(t)}</li>`).join('');
+    const cannot = c.cannot.map(g => `<li><b>${escH(g.what)}</b>: ${escH(g.why)}. <span class="hint">To fix: ${escH(g.fix)}</span></li>`).join('');
+    card.innerHTML = `<div class="agent-hdr"><div class="agent-name">${escH(c.summary)}</div></div>
+      ${can ? `<div class="hint" style="margin:8px 0 4px">It can:</div><ul>${can}</ul>` : ''}
+      ${cannot ? `<div class="hint" style="margin:8px 0 4px">It cannot yet:</div><ul>${cannot}</ul>` : ''}
+      <div class="hint" style="margin-top:8px">Local AI models this machine could run: ${escH(c.model_advice.join('; '))}</div>`;
+  } catch (e) {
+    card.innerHTML = '<div class="hint">Could not measure this machine: ' + escH(e.message) + '</div>';
+  }
+}
+
+async function loadUpdate() {
+  // Shows a notice only when a newer release exists. Applying it is done on the machine: the browser never installs code.
+  const card = document.getElementById('update-card');
+  try {
+    const res = await fetch('/api/status/update');
+    if (!res.ok) return;
+    const u = await res.json();
+    if (u.managed_by !== 'package' || !u.enabled || !u.update_available) return;
+    card.style.display = '';
+    card.innerHTML = `<div class="agent-hdr"><div class="agent-name">Update available: ${escH(u.latest)}</div>
+      <div class="agent-sev">you have ${escH(u.installed)}</div></div>
+      ${u.notes ? `<div class="hint" style="margin:6px 0;white-space:pre-wrap">${escH(u.notes)}</div>` : ''}
+      <div class="hint">To install it, run on this machine: <code>deploy/update.sh</code> (it checks the download, tests it, and goes back to the current version if anything fails).</div>`;
+  } catch (e) { /* no notice if GitHub cannot be reached */ }
+}
+
+loadCapability();
+loadUpdate();
+loadAgents();
+loadModels();
+SSAI.register({ addMachine, changePassword, deleteNode, recheckModel, revokeNode, saveModelKey, saveRouting, signOut, toggleAgent, toggleModel });
+loadNodes();
+</script>
+
+</body>
+</html>
