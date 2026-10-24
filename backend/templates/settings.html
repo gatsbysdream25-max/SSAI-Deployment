@@ -139,11 +139,17 @@
 
   <div class="section-title" style="margin-top:34px">AI models and API keys — every voice that can join the panel: switch it on or off, paste or replace its key. A model that runs out of credits or free quota rests by itself and returns when it answers again; your on/off choice is never changed for you.</div>
   <style>
-    /* Two models per row so the list is compact; one per row on a narrow screen. */
-    #model-list { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
-    #model-list .agent-card { margin: 0; }
-    #model-list .field-row input { min-width: 0; flex: 1; }
-    @media (max-width: 760px) { #model-list { grid-template-columns: 1fr; } }
+    /* Four models per row on a wide screen so the whole list fits without scrolling; fewer as the screen narrows. */
+    #model-list, #agent-list { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; }
+    #model-list .agent-card, #agent-list .agent-card { margin: 0; min-width: 0; padding: 10px 12px; }
+    #model-list .agent-hdr { flex-wrap: wrap; gap: 4px; }
+    #model-list .field-row { flex-wrap: wrap; gap: 6px; }
+    #model-list .field-row label { flex-basis: 100%; }
+    #model-list .field-row input { min-width: 0; flex: 1 1 120px; }
+    #model-list .hint, #model-list .agent-sev { overflow-wrap: anywhere; }
+    @media (max-width: 1280px) { #model-list, #agent-list { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+    @media (max-width: 960px) { #model-list, #agent-list { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+    @media (max-width: 560px) { #model-list, #agent-list { grid-template-columns: 1fr; } }
   </style>
   <div id="model-list"></div>
 

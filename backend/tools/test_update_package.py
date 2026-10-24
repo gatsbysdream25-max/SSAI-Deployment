@@ -57,6 +57,13 @@ def make_package(workdir, version, passing_tests=True, claimed_version=None, evi
     shutil.rmtree(stage, ignore_errors=True)
     top = os.path.join(stage, 'SwarmSentinel')
     copy_real_files_into(top)
+    # The new release's updater differs from the installed one near the top, as a real new release's would. Bash reads a running
+    # script as it goes, so replacing it mid-run must not leave it reading garbage (found with the first real release, 2026-10-24).
+    updater = os.path.join(top, 'deploy/update-package.sh')
+    with open(updater, encoding='utf-8') as handle:
+        source = handle.read()
+    with open(updater, 'w', encoding='utf-8', newline='\n') as handle:
+        handle.write(source.replace('\n', '\n# ' + 'a longer comment in the new release ' * 6 + '\n', 1))
     write(os.path.join(top, 'backend/app.py'), 'print("app", "%s")\n' % version)
     write(os.path.join(top, 'VERSION'), f'{claimed_version or version} (def)\n')
     write(os.path.join(top, 'requirements.txt'), 'flask\n')

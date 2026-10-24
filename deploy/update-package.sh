@@ -185,5 +185,4 @@ main() {
   log "updated to $LATEST"
 }
 
-main "$@"
-exit $?
+main "$@"; exit $?        # one line on purpose: bash must not read further from this file once it has been replaced
