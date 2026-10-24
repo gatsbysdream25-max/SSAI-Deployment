@@ -34,7 +34,7 @@ PKG="$OUT/swarmsentinel-$VERSION.tar.gz"
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
 printf '%s\n' "$VERSION ($SHA)" > "$tmp/VERSION"          # read by lineage.code_version() when there is no .git
-git archive --format=tar --prefix=SwarmSentinel/ "$REF" > "$tmp/pkg.tar"
+git -c core.autocrlf=false -c core.eol=lf archive --format=tar --prefix=SwarmSentinel/ "$REF" > "$tmp/pkg.tar"
 tar --transform 's,^,SwarmSentinel/,' -C "$tmp" -rf "$tmp/pkg.tar" VERSION
 gzip -9n < "$tmp/pkg.tar" > "$PKG"
 

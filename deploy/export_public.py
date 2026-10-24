@@ -136,6 +136,22 @@ def keep_executable_bits(files: List[str], out: str, env: dict) -> None:
             subprocess.run(["git", "update-index", "--chmod=+x", "--", path], cwd=out, env=env, check=True)
 
 
+PUBLIC_GITATTRIBUTES = """# Shell scripts and Python must keep Unix line endings or they fail on Linux, whatever machine checked them out or packaged them.
+*.sh text eol=lf
+*.py text eol=lf
+*.service text eol=lf
+*.in text eol=lf
+# The Windows installer is run by PowerShell, which is happy with either.
+*.ps1 text eol=crlf
+"""
+
+
+def write_public_gitattributes(out: str) -> None:
+    """The private repository's .gitattributes lists files that are not in the public copy, so the public one gets its own."""
+    with open(os.path.join(out, ".gitattributes"), "w", encoding="utf-8", newline="\n") as handle:
+        handle.write(PUBLIC_GITATTRIBUTES)
+
+
 def prepare_existing_clone(out: str, env: dict) -> str:
     """For --onto: make sure OUT is a clean git clone, then empty its working files (keeping .git) so the export replaces them.
     Returns a reason to refuse, or an empty string."""
@@ -203,6 +219,7 @@ def main(argv=None) -> int:
         dest = os.path.join(out, rel)
         os.makedirs(os.path.dirname(dest), exist_ok=True)
         shutil.copy2(os.path.join(REPO, rel), dest)
+    write_public_gitattributes(out)
     for cmd in ([] if args.onto else [["git", "init", "-q", "-b", "main"]]) + [["git", "add", "-A"]]:
         subprocess.run(cmd, cwd=out, env=env, check=True)
     keep_executable_bits(files, out, env)

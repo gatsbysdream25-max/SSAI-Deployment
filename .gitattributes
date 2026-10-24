@@ -1,0 +1,7 @@
+# Shell scripts and Python must keep Unix line endings or they fail on Linux, whatever machine checked them out or packaged them.
+*.sh text eol=lf
+*.py text eol=lf
+*.service text eol=lf
+*.in text eol=lf
+# The Windows installer is run by PowerShell, which is happy with either.
+*.ps1 text eol=crlf
