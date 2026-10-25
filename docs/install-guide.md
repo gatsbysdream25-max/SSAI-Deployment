@@ -19,14 +19,14 @@ Not sure? Native on Ubuntu or Debian is the most complete; Docker is the quickes
 
 ## 2. The four levels
 
-Each level includes the one before. The installer prints yours when it finishes, and Settings shows it any time (with what to do to reach the next one).
+Levels 1 to 3 add protection. Level 4 adds independence from the internet, not more detection. Each level includes the one before. The installer prints yours when it finishes, and Settings shows it any time (with what to do to reach the next one).
 
 | Level | Name | What it does | What the machine needs |
 |---|---|---|---|
 | 1 | **Watch** | Watches this machine: failed logins, odd processes, open ports, file changes, disk and service health | Linux with systemd, about 1 GB of memory |
 | 2 | **Guard** | Adds the dashboard, public threat lists matched against this network's traffic, local proof checks, a scan of the local network | 2 GB of memory, 2 GB free disk, `nmap` for the network scan |
 | 3 | **Panel** | Adds the AI panel: several AI models judge each serious finding, and a person approves any action | Enough models to reach the minimum number of voters (3): free cloud keys on the `/setup` page, or local models |
-| 4 | **Sovereign** | The panel runs on this machine's own models, so it works with no internet and no data leaves the building | Two local models on this machine: about 8 GB of memory and 9 GB of disk |
+| 4 | **Sovereign** (offline-capable) | The same panel as Level 3, run on this machine's own models, so it works with no internet and no data leaves the building. This is independence, not extra detection strength: a Level 3 panel with strong cloud models can judge as well or better | Two local models on this machine: about 8 GB of memory and 9 GB of disk |
 
 ### Why a machine may sit lower than you hoped
 

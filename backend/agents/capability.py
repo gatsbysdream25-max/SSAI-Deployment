@@ -12,7 +12,9 @@ The four levels, each includes the one before:
                 Needs: 2 GB of memory and 2 GB of free disk. (A machine that is only a "node" reports to a hub and stays at Watch.)
   3  Panel      adds the AI panel: several AI models judge each serious finding and must agree. Needs enough models that can answer
                 (cloud keys with internet, or local models) to reach the minimum number of voters (3 by default).
-  4  Sovereign  the panel runs on this machine's own models, so it works with no internet and no data leaves the building.
+  4  Sovereign  the same panel as Level 3, but run on this machine's own models, so it works with no internet and no data leaves
+                the building. This is about independence, not detection strength: a Level 3 panel using strong cloud models
+                can judge as well or better, so Level 4 is not "better", it is "offline-capable".
                 Needs: at least 2 local models answering, which in practice means about 8 GB of memory.
 
 The probe sends nothing anywhere: it reads the machine and, optionally, asks the local model server what it has installed.
@@ -33,7 +35,7 @@ LEVEL_MEANING = {
     1: "watches this machine only",
     2: "watches this machine and the network, with a dashboard, but no AI panel yet",
     3: "full protection with an AI panel that must agree before a serious verdict",
-    4: "full protection, and the AI panel runs on this machine so it works offline",
+    4: "full protection with the same AI panel, run entirely on this machine's own models so it works offline (not a stronger panel; cloud models are often stronger)",
 }
 
 LEVEL_MEANING_NO_HOST = {
