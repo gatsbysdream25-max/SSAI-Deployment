@@ -225,9 +225,10 @@ async function addMachine() {
   try {
     const d = await nodeCall('POST', '/api/nodes/enrollment-codes', name ? { node_id: name } : {});
     const cmd = `sudo deploy/install.sh --role node --hub-url ${location.origin} --enroll-code ${d.code}`;
+    const winCmd = `Invoke-WebRequest https://github.com/gatsbysdream25-max/SSAI-Deployment/releases/latest/download/install-windows-agent.ps1 -OutFile $env:TEMP\\install-agent.ps1; & $env:TEMP\\install-agent.ps1 -HubUrl ${location.origin} -EnrollCode ${d.code}`;
     document.getElementById('node-code').innerHTML = `
-      <div class="hint" style="margin:12px 0 4px">Single use, expires in ${escH(d.ttl_minutes)} minutes${d.node_id ? `, bound to the name <b>${escH(d.node_id)}</b>` : ''}. On the new machine, after cloning the repository:</div>
-      <pre style="white-space:pre-wrap;word-break:break-all;background:#0000002e;padding:8px;border-radius:6px">${escH(cmd)}</pre>`;
+      <div class="hint" style="margin:12px 0 4px">Single use, expires in ${escH(d.ttl_minutes)} minutes${d.node_id ? `, bound to the name <b>${escH(d.node_id)}</b>` : ''}. On a Linux machine, after cloning the repository:</div>
+      <pre style="white-space:pre-wrap;word-break:break-all;background:#0000002e;padding:8px;border-radius:6px">${escH(cmd)}</pre><div class="hint" style="margin:12px 0 4px">On a Windows PC, in PowerShell opened as administrator (add <b>-AutoStart Off</b> if it should not start at every boot):</div><pre style="white-space:pre-wrap;word-break:break-all;background:#0000002e;padding:8px;border-radius:6px">${escH(winCmd)}</pre>`;
   } catch (e) {
     showToast('Could not create a code: ' + e.message, false);
   }

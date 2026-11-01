@@ -20,6 +20,7 @@ not the private one: a private repository cannot serve downloads to anyone else.
    - `swarmsentinel-<version>.tar.gz`, the package
    - `swarmsentinel-<version>.tar.gz.sha256`, so people can check it arrived intact
    - `install-windows.ps1`, the one-command installer for Windows (also inside the package, but Windows users need it first)
+   - For the native Windows agent (see `docs/windows-agent.md`): `ssai-agent.exe`, `ssai-agent.exe.sha256` and `install-windows-agent.ps1`. Build the exe on Windows with `python windows_agent/build_exe.py --out C:\ssai-dist`. The installer downloads these from the **latest** release, so attach them to every release (or the agent install breaks for the next customer).
 5. Publish the release.
 
 ## Reading the counts
