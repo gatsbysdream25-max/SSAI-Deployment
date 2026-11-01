@@ -166,6 +166,16 @@ def _note_auth(what, resp):
             'deploy/install.sh --role node --enroll-code CODE --hub-url URL'))
 
 
+_version_cache = []
+
+def _my_version():
+    """Which SwarmSentinel version this machine runs, for the hub's fleet list. Read once: it cannot change while we run."""
+    if not _version_cache:
+        from lineage import code_version
+        _version_cache.append(code_version())
+    return _version_cache[0]
+
+
 def register(name, role, description, agent_type='scanner'):
     """Tell the hub this agent exists (name, role, host) so it appears on the dashboard. A failure is only logged,
     never fatal."""
@@ -173,7 +183,7 @@ def register(name, role, description, agent_type='scanner'):
         r = SESSION.post(f'{API}/agents/register', json={
             'agentId': _agent_id(name), 'name': _agent_id(name), 'role': role,
             'description': description, 'type': agent_type,
-            'hostname': HOSTNAME, 'platform': 'linux',
+            'hostname': HOSTNAME, 'platform': 'linux', 'version': _my_version(),
         }, headers=_headers(), timeout=5)
         _note_auth(f'register {name}', r)
     except Exception as e:
@@ -183,7 +193,8 @@ def heartbeat(name, status='active', scan_count=None, threat_count=None, last_sc
               provider_health=None):
     """Send the hub a 'still alive' ping with the agent's counters; without regular heartbeats the dashboard would
     show the agent as dead. Optional fields are only sent when given."""
-    payload = {'agentId': _agent_id(name), 'name': _agent_id(name), 'status': status, 'hostname': HOSTNAME}
+    payload = {'agentId': _agent_id(name), 'name': _agent_id(name), 'status': status, 'hostname': HOSTNAME,
+               'version': _my_version()}
     if scan_count is not None:
         payload['scan_count'] = scan_count
     if threat_count is not None:

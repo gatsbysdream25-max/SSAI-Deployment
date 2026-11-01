@@ -177,6 +177,16 @@ let current = {};
 // Machine names and hostnames come from the machines themselves, so everything shown is escaped.
 const escH = v => String(v === undefined || v === null ? '' : v).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
+// One line per machine saying which version it runs and whether that matches what this hub expects. Updating is done on the
+// machine itself (the hub never pushes code), so the hint says how.
+function versionLine(n) {
+  if (n.credential === 'none') return '';
+  const how = /^windows/i.test(n.platform || '') ? 're-run the Windows installer there' : 'run deploy/update.sh there';
+  if (n.version_state === 'current') return `<div class="hint" style="margin:6px 0">Version ${escH(n.version)}: up to date.</div>`;
+  if (n.version_state === 'different') return `<div class="hint" style="margin:6px 0;color:#f0b34a">Version ${escH(n.version)}, but this hub expects ${escH(n.expected_version)}. To update: ${how}.</div>`;
+  return `<div class="hint" style="margin:6px 0">${n.version ? 'Version ' + escH(n.version) : 'This machine has not reported its version yet (an older agent, or it has not checked in since the hub was updated).'}</div>`;
+}
+
 async function loadNodes() {
   const res = await fetch('/api/nodes');
   const nodes = await res.json();
@@ -186,6 +196,7 @@ async function loadNodes() {
         <div class="agent-name">${escH(n.node_id)}</div>
         <div class="agent-sev">${escH(n.platform || '')} · credential: ${escH(n.credential)} · ${escH(n.agent_count)} agents · last seen ${escH(n.last_seen ? new Date(n.last_seen).toLocaleString() : 'never')}</div>
       </div>
+      ${versionLine(n)}
       ${n.credential === 'none' ? '<div class="hint" style="margin:6px 0">No node credential: this is the hub itself or an entry from an older version.</div>' : ''}
       <div style="margin-top:8px">
         ${n.credential === 'active' ? `<button class="save-btn" data-node="${escH(n.node_id)}" data-on-click="revokeNode" data-args="${escH(JSON.stringify([n.node_id]))}">Revoke credential</button>` : ''}

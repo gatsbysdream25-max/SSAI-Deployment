@@ -13,7 +13,7 @@ import urllib.error
 import urllib.request
 from collections import deque
 
-from . import util
+from . import __version__, util
 
 log = logging.getLogger("hub")
 TIMEOUT_SECONDS = 10
@@ -79,13 +79,13 @@ class HubClient:
     def register(self, name, role, description):
         self._send("/agents/register", {"agentId": self.agent_id(name), "name": self.agent_id(name), "role": role,
                                         "description": description, "type": "scanner",
-                                        "hostname": self.hostname, "platform": "windows"})
+                                        "hostname": self.hostname, "platform": "windows", "version": __version__})
 
     def heartbeat(self, name, scans, found, last_scan):
         """Tell the hub this agent is alive. Returns the hub's status code (404 means the hub forgot the agent)."""
         status, _ = self._send("/agents/heartbeat", {"agentId": self.agent_id(name), "name": self.agent_id(name), "status": "active",
                                          "hostname": self.hostname, "scan_count": scans, "threat_count": found,
-                                         "last_scan": last_scan})
+                                         "last_scan": last_scan, "version": __version__})
         return status
 
     def send_finding(self, finding, detected_by):

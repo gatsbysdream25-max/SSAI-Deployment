@@ -202,6 +202,7 @@ class Node(db.Model):
     token_hint  = db.Column(db.String(12), nullable=True)      # first characters, so an admin can tell tokens apart
     enrolled_at = db.Column(db.DateTime, nullable=True)
     revoked_at  = db.Column(db.DateTime, nullable=True)
+    agent_version = db.Column(db.String(40), nullable=True)    # what the machine says it runs (see fleet.py)
 
     def to_dict(self):
         """The machine as a JSON-ready dict. The token and its hash are never included; `credential` only says revoked,
@@ -220,6 +221,7 @@ class Node(db.Model):
             'ai_count':    self.ai_count or 0,
             'credential':  'revoked' if self.status == 'revoked' else ('active' if self.token_hash else 'none'),
             'enrolled_at': _utc_iso(self.enrolled_at),
+            'version':     self.agent_version or '',
         }
 
 

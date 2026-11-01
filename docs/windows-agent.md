@@ -66,3 +66,10 @@ Then delete the machine on the hub's Settings page (or **Revoke** it, which keep
   `SSAI_AGENT_NO_LOCK` on a real install.
 - Not done yet: the exe is unsigned (Windows SmartScreen may warn), and the agent does not update itself; reinstall with
   the new release to update.
+
+## Seeing which version each machine runs
+
+Every machine tells the hub its version each time it checks in. In **Settings, Machines** each one shows "up to date", or
+"this hub expects X", or "has not reported its version yet" (an older agent). The hub only compares and shows; it never
+tells a machine to update. To update a Windows PC, run the installer again from the latest release; for a Linux machine run
+`deploy/update.sh` on it. That keeps a stolen dashboard login from being able to push code to your machines.

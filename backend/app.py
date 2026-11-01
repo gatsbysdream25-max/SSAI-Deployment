@@ -546,7 +546,8 @@ _NEW_COLUMNS = {           # table -> [(column, SQL type, index name or None)] a
                ('last_seen', 'TIMESTAMP', None), ('last_reported', 'TIMESTAMP', None),
                ('times_seen', 'INTEGER', None), ('times_reported', 'INTEGER', None)],
     'node': [('token_hash', 'VARCHAR(64)', 'ix_node_token_hash'), ('token_hint', 'VARCHAR(12)', None),
-             ('enrolled_at', 'TIMESTAMP', None), ('revoked_at', 'TIMESTAMP', None)],
+             ('enrolled_at', 'TIMESTAMP', None), ('revoked_at', 'TIMESTAMP', None),
+             ('agent_version', 'VARCHAR(40)', None)],
 }
 
 

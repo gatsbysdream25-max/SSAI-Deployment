@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 import json
 import time
 
+import fleet
 from auth import identity, node_rate_limited
 
 agents_bp = Blueprint('agents', __name__)
@@ -42,6 +43,17 @@ def _touch_hub():
     node = Node.hub()
     if node is not None:
         node.last_seen = datetime.now(timezone.utc)      # committed with the heartbeat below
+
+
+def _remember_version(data):
+    """If an enrolled machine says which version it runs, note it on its Node row (shown in the Settings fleet list).
+    The admin key's calls are the hub's own runner, whose version the hub already knows. Committed by the caller."""
+    who = identity()
+    if who is None or who.kind != 'node':
+        return
+    version = fleet.clean_version(data.get('version'))
+    if version and who.node.agent_version != version:
+        who.node.agent_version = version
 
 
 @agents_bp.route('/', methods=['GET'])
@@ -83,6 +95,7 @@ def register_agent():
         agent.description = data.get('description', agent.description or '')
         agent.hostname    = data.get('hostname', agent.hostname or '')
         agent.platform    = data.get('platform', agent.platform or '')
+    _remember_version(data)
     db.session.commit()
     return jsonify({'success': True, 'agent': agent.to_dict()}), 201
 
@@ -130,6 +143,7 @@ def heartbeat():
             agent.provider_health = json.dumps(data['provider_health'])
         except (TypeError, ValueError):
             pass
+    _remember_version(data)
     who = identity()
     if who is not None and who.kind == 'admin':          # the hub's own runner (a node's token refreshed its own row)
         _touch_hub()

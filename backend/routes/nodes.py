@@ -9,6 +9,7 @@ import socket
 from flask import Blueprint, jsonify, request
 
 import auth as _auth
+import fleet
 from models import Agent, EnrollmentCode, Node, Threat, db
 from request_helpers import _clean_list_of_str, _clean_severity, _clean_str, _clean_tier, _utcnow
 
@@ -94,9 +95,13 @@ def get_nodes():
     from collections import Counter
     per_node = Counter(a.name.rsplit("@", 1)[1] for a in Agent.query.filter(Agent.name.like("%@%")).all())
     out = []
+    hub = Node.hub()
     for n in Node.query.order_by(Node.last_seen.desc()).all():
         d = n.to_dict()
+        if hub is not None and n.id == hub.id:
+            d["version"] = fleet.hub_version()           # the hub does not report to itself
         d["agent_count"] = per_node.get(n.node_id, d["agent_count"])
+        d.update(fleet.describe(d))
         out.append(d)
     return jsonify(out)
 
