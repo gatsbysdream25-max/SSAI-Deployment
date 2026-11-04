@@ -3,6 +3,11 @@
 ## Unreleased (2026-11-04)
 
 ### A clean install on a real VM, and what it showed
+- **Private releases (optional).** If the releases repository is ever made private, an install can be given a read-only GitHub
+  access token and keep working: `SSAI_UPDATE_TOKEN` for the one-line installer (the installer saves it owner-only in
+  `.update-token` so `deploy/update.sh` and the Settings update check can use it), `-Token` for the Windows installer, or the new
+  **Updates from a private repository** card in Settings. The token goes to `api.github.com` only, over stdin (never on a command
+  line), and is never shown again. A public repository needs none and behaves exactly as before.
 - Settings has a **Microsoft Copilot and Teams** card: a person adds their own Entra tenant ID, the bot's application (client) ID
   and secret, the token audience and the people who may approve blocks. The hub's values go to `.env`, the bot's to
   `copilot/.env` (owner-only), with one shared lane key made for both. Secrets are never sent back to the page. Saving restarts the

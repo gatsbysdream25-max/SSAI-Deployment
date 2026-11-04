@@ -43,6 +43,7 @@ from routes.microsoft import microsoft_bp
 from routes.quarantine import quarantine_bp
 from routes.allowlist import allowlist_bp
 from routes.login import login_bp, _safe_next      # sign-in routes; _safe_next is re-exported for tests
+import logging
 import os
 import hashlib
 import secrets

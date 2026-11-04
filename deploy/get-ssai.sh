@@ -12,6 +12,13 @@
 #   --version TAG    install this release instead of the newest one (for example v0.1.5)
 #   -h, --help       this text
 #
+# Private repository: put a read-only GitHub access token in SSAI_UPDATE_TOKEN (sudo keeps it with --preserve-env). The files are then
+# fetched through GitHub's API, the token is saved owner-only in DIR/.update-token so deploy/update.sh can use it later, and it
+# is never printed or put on a command line. Typing it so it is not kept in your shell history:
+#   read -rsp "GitHub token: " SSAI_UPDATE_TOKEN; export SSAI_UPDATE_TOKEN
+#   printf 'Authorization: Bearer %s\n' "$SSAI_UPDATE_TOKEN" | curl -fsSL -H @- -H "Accept: application/vnd.github.raw" \
+#     https://api.github.com/repos/gatsbysdream25-max/SSAI-Deployment/contents/deploy/get-ssai.sh | sudo --preserve-env=SSAI_UPDATE_TOKEN bash
+#
 # What it checks: the package is downloaded over https, its SHA-256 must match the checksum published beside it, it must look
 # like SwarmSentinel and carry the version it claims, and its file paths must stay inside its own folder. The checksum proves
 # the download is whole and is the file that was published; it does not prove WHO published it (signed releases are a later step).
@@ -20,6 +27,8 @@ set -euo pipefail
 
 SLUG="${SSAI_UPDATE_REPO:-gatsbysdream25-max/SSAI-Deployment}"
 VALID_TAG='^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$'
+VALID_TOKEN='^[A-Za-z0-9_-]{20,255}$'
+TOKEN="${SSAI_UPDATE_TOKEN:-}"
 
 say() { printf '\033[1m==>\033[0m %s\n' "$*"; }
 die() { printf '\033[31merror:\033[0m %s\n' "$*" >&2; exit 1; }
@@ -27,10 +36,10 @@ die() { printf '\033[31merror:\033[0m %s\n' "$*" >&2; exit 1; }
 # Everything below is in functions and the last line calls main: when this script is piped from curl, bash must have read the
 # whole of it before anything runs, so a download cut short can never run half an installer.
 
-show_help() { sed -n '2,19p' "$0" 2>/dev/null | sed 's/^# \{0,1\}//' || true; }
+show_help() { sed -n '2,21p' "$0" 2>/dev/null | sed 's/^# \{0,1\}//' || true; }
 
 parse_arguments() {
-  DIR="" WANT_TAG="" PASS_ON=()
+  DIR="" WANT_TAG="" PASS_ON=() PRIVATE=0
   while [ $# -gt 0 ]; do
     case "$1" in
       --dir) DIR="${2:-}"; [ -n "$DIR" ] || die "--dir needs a folder"; shift 2 ;;
@@ -56,6 +65,10 @@ check_tools() {
   for tool in curl tar sha256sum awk sed grep; do
     command -v "$tool" >/dev/null || die "$tool is not installed (Debian/Ubuntu: sudo apt-get install -y curl)"
   done
+  if [ -n "$TOKEN" ]; then
+    printf '%s' "$TOKEN" | grep -Eq "$VALID_TOKEN" || die "SSAI_UPDATE_TOKEN does not look like a GitHub access token (letters, digits, - and _ only)"
+    command -v python3 >/dev/null || die "python3 is needed to read the private release (Debian/Ubuntu: sudo apt-get install -y python3)"
+  fi
 }
 
 # default_folder: SwarmSentinel in the home folder of the person who ran sudo (so they can read and update it).
@@ -70,13 +83,32 @@ default_folder() {
 fetch() {
   local protocols='=https'
   [ -z "${SSAI_UPDATE_API:-}" ] || protocols='=https,file'
-  curl -fsSL --proto "$protocols" -m 900 -o "$2" "$1"
+  if [ -n "$TOKEN" ] && [[ "$1" == https://api.github.com/* ]]; then        # the token goes to curl on stdin and only to GitHub's API
+    printf 'header = "Authorization: Bearer %s"\nheader = "Accept: application/octet-stream"\n' "$TOKEN" \
+      | curl -fsSL --proto "$protocols" -m 900 -K - -o "$2" "$1"
+  else
+    curl -fsSL --proto "$protocols" -m 900 -o "$2" "$1"
+  fi
+}
+
+# asset_url NAME: the API address of one file attached to the release read into $WORK/release.json (private repositories only).
+asset_url() {
+  python3 -c 'import json,sys
+r = json.load(open(sys.argv[1]))
+print(next((a["url"] for a in r.get("assets", []) if a.get("name") == sys.argv[2]), ""))' "$WORK/release.json" "$1"
 }
 
 # find_tag: which release to install. Sets TAG and BASE (the address its files are under).
 find_tag() {
   local api
-  if [ -n "$WANT_TAG" ]; then
+  if [ -n "$TOKEN" ] && [ -z "${SSAI_UPDATE_API:-}" ]; then
+    # A private release has no public download address: read it (the newest, or the one asked for) and use its files' API addresses.
+    if [ -n "$WANT_TAG" ]; then api="https://api.github.com/repos/$SLUG/releases/tags/$WANT_TAG"
+    else api="https://api.github.com/repos/$SLUG/releases/latest"; fi
+    fetch "$api" "$WORK/release.json" || die "could not read the release from GitHub (is the access token right and allowed to read $SLUG?)"
+    TAG="$(sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$WORK/release.json" | head -1)"
+    PRIVATE=1
+  elif [ -n "$WANT_TAG" ]; then
     TAG="$WANT_TAG"
   else
     api="${SSAI_UPDATE_API:-https://api.github.com/repos/$SLUG/releases/latest}"
@@ -90,8 +122,16 @@ find_tag() {
 download_and_check() {
   local name="swarmsentinel-$TAG.tar.gz" expected actual
   say "downloading SwarmSentinel $TAG"
-  fetch "$BASE/$name" "$WORK/package.tar.gz" || die "download of $name failed"
-  fetch "$BASE/$name.sha256" "$WORK/package.sha256" || die "download of the checksum file failed"
+  if [ "$PRIVATE" = 1 ]; then
+    local pkg_url sum_url
+    pkg_url="$(asset_url "$name")"; sum_url="$(asset_url "$name.sha256")"
+    [ -n "$pkg_url" ] && [ -n "$sum_url" ] || die "the release has no $name (and $name.sha256) attached"
+    fetch "$pkg_url" "$WORK/package.tar.gz" || die "download of $name failed"
+    fetch "$sum_url" "$WORK/package.sha256" || die "download of the checksum file failed"
+  else
+    fetch "$BASE/$name" "$WORK/package.tar.gz" || die "download of $name failed"
+    fetch "$BASE/$name.sha256" "$WORK/package.sha256" || die "download of the checksum file failed"
+  fi
   expected="$(awk '{print $1; exit}' "$WORK/package.sha256")"
   actual="$(sha256sum "$WORK/package.tar.gz" | awk '{print $1}')"
   [ -n "$expected" ] && [ "$expected" = "$actual" ] || die "the download does not match its published checksum; nothing was installed"
@@ -130,6 +170,15 @@ place_files() {
   say "unpacked to $DIR"
 }
 
+# keep_token: save the access token beside the install (owner-only) so deploy/update.sh can fetch later releases of a private repository.
+keep_token() {
+  [ -n "$TOKEN" ] || return 0
+  ( umask 077; printf '%s\n' "$TOKEN" > "$DIR/.update-token" )
+  local owner="${SUDO_USER:-}"
+  if [ "${SSAI_GET_UID:-$(id -u)}" = 0 ] && [ -n "$owner" ] && [ "$owner" != root ]; then chown "$owner:" "$DIR/.update-token"; fi
+  say "saved the access token in $DIR/.update-token (readable only by its owner)"
+}
+
 main() {
   parse_arguments "$@"
   check_privileges
@@ -141,6 +190,7 @@ main() {
   download_and_check
   unpack_and_inspect
   place_files
+  keep_token
   say "running the installer"
   bash "$DIR/deploy/install.sh" ${PASS_ON[@]+"${PASS_ON[@]}"}
 }

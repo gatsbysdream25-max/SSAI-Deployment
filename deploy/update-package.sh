@@ -19,7 +19,7 @@ set -euo pipefail
 # this very file in the middle of the update cannot corrupt the run.
 
 # Paths in the install folder that belong to the machine, not to the release. They are never replaced, removed or backed up.
-KEEP_TOP=(swarmsentinel-env logs .env .update.lock .update-backup.tar.gz)
+KEEP_TOP=(swarmsentinel-env logs .env .update.lock .update-backup.tar.gz .update-token)
 
 in_keep_list() {          # in_keep_list NAME: is this top-level name one of the machine's own?
   local name
@@ -61,13 +61,27 @@ find_release() {
   return 0
 }
 
+# fetch_file URL OUT SECONDS: download over https. A private repository's files are reached through GitHub's API with the install's
+# read-only access token (SSAI_UPDATE_TOKEN, or the first line of .update-token). The token goes to curl on stdin, so it never
+# shows in the process list, and only to api.github.com: curl does not pass it on when GitHub redirects to its file storage.
+fetch_file() {
+  local protocols='=https' secret="${SSAI_UPDATE_TOKEN:-}"
+  [ -z "${SSAI_UPDATE_API:-}" ] || protocols='=https,file'      # tests serve a local file instead of GitHub
+  [ -n "$secret" ] || [ ! -f "$REPO/.update-token" ] || secret="$(head -n1 "$REPO/.update-token" | tr -d '[:space:]')"
+  if [ -n "$secret" ] && [[ "$1" == https://api.github.com/* ]]; then
+    printf 'header = "Authorization: Bearer %s"\nheader = "Accept: application/octet-stream"\n' "$secret" \
+      | curl -fsSL --proto "$protocols" -m "$3" -K - -o "$2" "$1"
+  else
+    curl -fsSL --proto "$protocols" -m "$3" -o "$2" "$1"
+  fi
+}
+
 # download_and_check: fetch the package and its checksum into $WORK and prove the package is the one that was published.
 download_and_check() {
-  local protocols='=https' expected actual
-  [ -z "${SSAI_UPDATE_API:-}" ] || protocols='=https,file'      # tests serve a local file instead of GitHub
+  local expected actual
   log "downloading $LATEST"
-  curl -fsSL --proto "$protocols" -m 900 -o "$WORK/package.tar.gz" "$PACKAGE_URL" || die "download of the package failed"
-  curl -fsSL --proto "$protocols" -m 60 -o "$WORK/package.sha256" "$CHECKSUM_URL" || die "download of the checksum failed"
+  fetch_file "$PACKAGE_URL" "$WORK/package.tar.gz" 900 || die "download of the package failed"
+  fetch_file "$CHECKSUM_URL" "$WORK/package.sha256" 60 || die "download of the checksum failed"
   expected="$(awk '{print $1; exit}' "$WORK/package.sha256")"
   actual="$(sha256sum "$WORK/package.tar.gz" | awk '{print $1}')"
   [ -n "$expected" ] && [ "$expected" = "$actual" ] || die "the downloaded package does not match its published checksum; nothing was changed"

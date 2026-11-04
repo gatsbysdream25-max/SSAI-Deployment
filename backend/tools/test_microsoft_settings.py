@@ -122,6 +122,28 @@ class MicrosoftSettings(unittest.TestCase):
         self.assertIn('Permission denied', msg)
         self.assertIn('chown', msg)
 
+    def test_the_update_token_is_admin_only_stored_owner_only_and_never_returned(self):
+        token = 'github_pat_11AAAAAAA0abcdefghijklmnopqrstuvwxyz0123456789'
+        url = '/api/settings/update-token'
+        self.assertEqual(self.c.post(url, json={'token': token}).status_code, 401)
+        self.assertEqual(self.c.get(url).status_code, 401)
+        self.assertFalse(self.c.get(url, headers=self.h).get_json()['set'])
+        r = self.c.post(url, json={'token': token}, headers=self.h)
+        self.assertEqual(r.status_code, 200, r.get_data(as_text=True))
+        self.assertNotIn(token, r.get_data(as_text=True))
+        path = os.path.join(self.dir, '.update-token')
+        self.assertEqual(self.read(path).strip(), token)
+        if os.name == 'posix':
+            self.assertEqual(os.stat(path).st_mode & 0o777, 0o600)
+        got = self.c.get(url, headers=self.h)
+        self.assertTrue(got.get_json()['set'])
+        self.assertNotIn(token, got.get_data(as_text=True))
+        for bad in ('short', 'has space in it 12345678901234567890', 'line' + chr(10) + 'break12345678901234567890', 12345):
+            self.assertEqual(self.c.post(url, json={'token': bad}, headers=self.h).status_code, 400, bad)
+        self.assertEqual(self.read(path).strip(), token)            # a refused value changes nothing
+        self.assertEqual(self.c.post(url, json={'clear': True}, headers=self.h).status_code, 200)
+        self.assertFalse(os.path.exists(path))
+
 
 if __name__ == '__main__':
     unittest.main(verbosity=2)

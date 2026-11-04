@@ -205,3 +205,47 @@ def _clear(hub_path, bot_path):
         os.environ.pop(key, None)
     return jsonify({'ok': True, 'restarting': _restart_hub_soon(), 'notes': [], **_state()})
 
+
+
+# ---- the access token for a private releases repository -----------------------------------------------------------------------
+# Stored beside the install as .update-token (owner-only) where deploy/update.sh and the update check both read it. Never sent back.
+
+def _token_path():
+    return os.path.join(os.path.dirname(os.path.abspath(_hub_env_path())), '.update-token')
+
+
+@microsoft_bp.route('/api/settings/update-token', methods=['GET'])
+def get_update_token():
+    """Whether an access token for private releases is saved (never the token itself)."""
+    if not _auth.is_admin():
+        return jsonify({'error': 'Unauthorized'}), 401
+    return jsonify({'set': os.path.exists(_token_path()) or bool(os.environ.get('SSAI_UPDATE_TOKEN'))})
+
+
+@microsoft_bp.route('/api/settings/update-token', methods=['POST'])
+def save_update_token():
+    """Save the read-only GitHub access token ({"token": "..."}), or remove it ({"clear": true})."""
+    if not _auth.is_admin():
+        return jsonify({'error': 'Unauthorized'}), 401
+    body = request.get_json(silent=True)
+    if not isinstance(body, dict):
+        return jsonify({'error': 'expected a JSON object'}), 400
+    path = _token_path()
+    try:
+        if body.get('clear') is True:
+            if os.path.exists(path):
+                os.remove(path)
+        else:
+            value = body.get('token')
+            if not isinstance(value, str) or not re.match(r'^[A-Za-z0-9_\-]{20,255}$', value.strip()):
+                return jsonify({'error': 'That does not look like a GitHub access token (letters, digits, - and _ only, 20 to 255 characters). Paste the token itself.'}), 400
+            envfile._write_atomic(path, value.strip() + '\n')
+    except OSError as exc:
+        return jsonify({'error': f'Could not write the token file: {exc.strerror or exc}. The account running SwarmSentinel must own {os.path.dirname(path)}',
+                        'fix': f'sudo chown -R "$USER": {os.path.dirname(path)}'}), 500
+    try:
+        from agents import release_check
+        release_check._cache.update(at=0.0, answer=None)      # ask GitHub again with the new token
+    except Exception:                                         # nosec: the cache is only an optimisation
+        pass
+    return jsonify({'ok': True, 'set': os.path.exists(path)})

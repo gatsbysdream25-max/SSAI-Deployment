@@ -6,6 +6,10 @@ machine is that one ordinary web request, the same one any browser makes; nothin
 
 Turn the check off with SSAI_UPDATE_CHECK=off. Point it at another repository with SSAI_UPDATE_REPO=OWNER/REPO.
 
+A private repository: give the install a read-only GitHub access token (SSAI_UPDATE_TOKEN in the environment, or one line in
+the install folder's .update-token file, owner-only). The token is sent only to https://api.github.com and is never printed;
+with it the downloads go through the API, because a private release has no public download address.
+
 From a shell:   python release_check.py INSTALL_FOLDER     prints "name value" lines the updater reads.
 """
 from __future__ import annotations
@@ -15,11 +19,16 @@ import os
 import re
 import sys
 import time
+import urllib.error
 import urllib.request
 
 DEFAULT_REPO = "gatsbysdream25-max/SSAI-Deployment"
 CACHE_SECONDS = 30 * 60          # GitHub allows only 60 anonymous requests an hour per address, so do not ask on every page view
 _VALID_TAG = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
+
+_VALID_TOKEN = re.compile(r"^[A-Za-z0-9_\-]{20,255}$")
+_API_HOST = "https://api.github.com/"
+TOKEN_FILE = ".update-token"
 
 _cache = {"at": 0.0, "answer": None}
 
@@ -42,6 +51,21 @@ def api_url() -> str:
     return f"https://api.github.com/repos/{repo}/releases/latest"
 
 
+def token(root: str = "") -> str:
+    """The read-only access token for a private repository: SSAI_UPDATE_TOKEN, else the first line of ROOT/.update-token.
+    Empty when there is none (a public repository needs none). A token that does not look like one is an error, not ignored."""
+    value = os.environ.get("SSAI_UPDATE_TOKEN", "").strip()
+    if not value and root:
+        try:
+            with open(os.path.join(root, TOKEN_FILE), encoding="utf-8") as handle:
+                value = handle.readline().strip()
+        except OSError:
+            value = ""
+    if value and not _VALID_TOKEN.match(value):
+        raise ReleaseError("the update access token does not look right (letters, digits, - and _ only, 20 to 255 characters)")
+    return value
+
+
 def installed_version(root: str) -> str:
     """The version this install says it is: the first word of its VERSION file ('v0.4.0 (abc123def456)' gives 'v0.4.0')."""
     try:
@@ -52,8 +76,10 @@ def installed_version(root: str) -> str:
     return words[0] if words else "unknown"
 
 
-def _download_urls(release: dict) -> tuple:
-    """Find the package and its checksum file among a release's attached files."""
+def _download_urls(release: dict, use_api: bool = False) -> tuple:
+    """Find the package and its checksum file among a release's attached files. A private release is reached through the API
+    address of each file ("url"), a public one through its ordinary download address."""
+    key = "url" if use_api else "browser_download_url"
     package = next((a for a in release.get("assets", [])
                     if a.get("name", "").startswith("swarmsentinel-") and a.get("name", "").endswith(".tar.gz")), None)
     if not package:
@@ -62,7 +88,7 @@ def _download_urls(release: dict) -> tuple:
     checksum = next((a for a in release.get("assets", []) if a.get("name") == wanted), None)
     if not checksum:
         raise ReleaseError(f"the newest release has no {wanted} file, so the download could not be checked")
-    return package["browser_download_url"], checksum["browser_download_url"]
+    return package[key], checksum[key]
 
 
 def _check_url_is_safe(url: str) -> None:
@@ -74,19 +100,29 @@ def _check_url_is_safe(url: str) -> None:
     raise ReleaseError("refusing a download address that is not https")
 
 
-def fetch_latest(timeout: int = 10) -> dict:
+def fetch_latest(timeout: int = 10, root: str = "") -> dict:
     """Ask for the newest release. Returns {'tag', 'notes', 'package_url', 'checksum_url'} or raises ReleaseError."""
+    url, secret = api_url(), token(root)
+    use_api = bool(secret) and url.startswith(_API_HOST)        # the token goes to GitHub's API and nowhere else
+    headers = {"Accept": "application/vnd.github+json", "User-Agent": "SwarmSentinel-update-check"}
+    if use_api:
+        headers["Authorization"] = "Bearer " + secret
     try:
-        request = urllib.request.Request(api_url(), headers={"Accept": "application/vnd.github+json",
-                                                              "User-Agent": "SwarmSentinel-update-check"})
+        request = urllib.request.Request(url, headers=headers)
         with urllib.request.urlopen(request, timeout=timeout) as response:   # nosec: https, or a test file
             release = json.loads(response.read().decode("utf-8"))
+    except urllib.error.HTTPError as error:
+        hint = ""
+        if error.code in (401, 403, 404):
+            hint = (": the access token was refused or has no access to the repository" if secret
+                    else ": if the repository is private, add a read-only access token (Settings, or SSAI_UPDATE_TOKEN)")
+        raise ReleaseError(f"could not read the newest release (HTTP {error.code}{hint})")
     except Exception as error:
         raise ReleaseError(f"could not read the newest release ({error.__class__.__name__}: {error})")
     tag = str(release.get("tag_name", ""))
     if not _VALID_TAG.match(tag):
         raise ReleaseError("the newest release has no usable version tag")
-    package_url, checksum_url = _download_urls(release)
+    package_url, checksum_url = _download_urls(release, use_api)
     _check_url_is_safe(package_url)
     _check_url_is_safe(checksum_url)
     return {"tag": tag, "notes": str(release.get("body") or "")[:2000],
@@ -103,7 +139,7 @@ def check(root: str, use_cache: bool = False) -> dict:
     if use_cache and _cache["answer"] and now - _cache["at"] < CACHE_SECONDS:
         return dict(_cache["answer"], installed=answer["installed"])
     try:
-        latest = fetch_latest()
+        latest = fetch_latest(root=root)
     except ReleaseError as error:
         answer["error"] = str(error)
         return answer
@@ -123,7 +159,7 @@ def main(argv: list) -> int:
         print("error the update check is switched off (SSAI_UPDATE_CHECK=off)")
         return 1
     try:
-        latest = fetch_latest()
+        latest = fetch_latest(root=root)
     except ReleaseError as error:
         print(f"error {error}")
         return 1

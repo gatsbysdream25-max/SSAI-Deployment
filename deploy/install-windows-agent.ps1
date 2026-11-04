@@ -9,6 +9,8 @@
   Program Files, enrolls this PC with the hub, and registers a Windows scheduled task that starts the agent at every boot
   as SYSTEM. It also adds a "SwarmSentinel Dashboard" icon to the Desktop and to the Start menu (it opens the hub's
   dashboard in your browser). Nothing needs Python. Remove it any time with -Uninstall.
+  Private releases: if the releases repository is private, pass a read-only GitHub access token with -Token (or set
+  $env:SSAI_UPDATE_TOKEN first). It is sent only to api.github.com and is not saved.
   Pin to Start: Windows does not let a program pin itself. Open Start, All apps, right-click SwarmSentinel Dashboard,
   choose Pin to Start.
 
@@ -31,6 +33,7 @@ param(
     [ValidateSet("On", "Off")][string]$StartMenu = "On",   # On: the same entry in the Start menu's app list
     [string]$ExePath,                                   # use this exe instead of downloading (offline or testing)
     [string]$Repo = "gatsbysdream25-max/SSAI-Deployment",
+    [string]$Token = $env:SSAI_UPDATE_TOKEN,            # a read-only GitHub access token, only if the releases repository is private
     [switch]$Uninstall,
     [switch]$PurgeData                                  # with -Uninstall: also delete the credential and logs
 )
@@ -119,9 +122,33 @@ function Remove-Agent {
 function Get-Download($file) {
     # PowerShell 5.1 does not use TLS 1.2 by default, which GitHub requires.
     [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-    $url = "https://github.com/$Repo/releases/latest/download/$file"
     $target = Join-Path $env:TEMP $file
-    Invoke-WebRequest -Uri $url -OutFile $target -UseBasicParsing
+    if (-not $Token) {
+        Invoke-WebRequest -Uri "https://github.com/$Repo/releases/latest/download/$file" -OutFile $target -UseBasicParsing
+        return $target
+    }
+    # A private release has no public download address: find the file through the API, then fetch it with the token.
+    $headers = @{ Authorization = "Bearer $Token"; "User-Agent" = "SwarmSentinel-installer" }
+    try {
+        $release = Invoke-RestMethod -Uri "https://api.github.com/repos/$Repo/releases/latest" -Headers $headers
+    } catch {
+        throw "Could not read the latest release of $Repo with that access token (is it right, and allowed to read the repository?)"
+    }
+    $asset = $release.assets | Where-Object { $_.name -eq $file } | Select-Object -First 1
+    if (-not $asset) { throw "The latest release of $Repo has no file named $file" }
+    $fileHeaders = @{ Authorization = "Bearer $Token"; Accept = "application/octet-stream"; "User-Agent" = "SwarmSentinel-installer" }
+    try {
+        # GitHub answers with a redirect to a signed address. Follow it without the token (the file store refuses both together).
+        Invoke-WebRequest -Uri $asset.url -Headers $fileHeaders -OutFile $target -UseBasicParsing -MaximumRedirection 0 -ErrorAction Stop
+    } catch {
+        $response = $_.Exception.Response
+        if ($response -and ([int]$response.StatusCode -in 301, 302, 303, 307, 308)) {
+            $where = if ($response.Headers.Location) { $response.Headers.Location.ToString() } else { $response.Headers["Location"] }
+            Invoke-WebRequest -Uri $where -OutFile $target -UseBasicParsing
+        } else {
+            throw "Download of $file failed: $($_.Exception.Message)"
+        }
+    }
     return $target
 }
 

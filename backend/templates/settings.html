@@ -168,6 +168,15 @@
     <button class="save-btn" data-on-click="clearMicrosoft">Remove all Microsoft settings</button>
   </div>
 
+  <div class="section-title" style="margin-top:34px">Updates from a private repository (optional) &mdash; only needed if the releases repository is private. Public installs need nothing here.</div>
+  <div class="agent-card" id="tok-card">
+    <div class="agent-hdr"><div class="agent-name">GitHub access token (read only)</div><div class="agent-sev" id="tok-state">Loading&hellip;</div></div>
+    <div class="field-row"><label>Token</label><input type="password" id="tok-value" placeholder="paste a fine-grained token with read-only Contents access" autocomplete="off"></div>
+    <div class="hint" style="margin:8px 0">Make it on GitHub: Settings, Developer settings, Fine-grained tokens, choose only the SSAI-Deployment repository, permission Contents: Read-only. It is kept in a file only this account can read, used only to ask GitHub for new releases, and never shown again.</div>
+    <button class="save-btn" data-on-click="saveUpdateToken">Save token</button>
+    <button class="save-btn" data-on-click="clearUpdateToken">Remove token</button>
+  </div>
+
   <div class="section-title" style="margin-top:34px">AI routing for the local-LLM analyzer agents — only used while those agents are switched on. Which AI model handles which severity tier — edits write to the shared .env and restart the agent runner.</div>
   <div id="agent-cards"></div>
   <div class="save-row">
@@ -498,12 +507,38 @@ async function clearMicrosoft() {
   } catch (e) { showToast('Not removed: ' + e.message, false); }
 }
 
+async function loadUpdateToken() {
+  try {
+    const t = await nodeCall('GET', '/api/settings/update-token');
+    document.getElementById('tok-state').textContent = t.set ? 'token saved' : 'none (fine for a public repository)';
+  } catch (e) { document.getElementById('tok-state').textContent = 'could not load: ' + e.message; }
+}
+
+async function saveUpdateToken() {
+  const box = document.getElementById('tok-value');
+  try {
+    await nodeCall('POST', '/api/settings/update-token', { token: box.value.trim() });
+    box.value = '';
+    showToast('Token saved', true);
+    loadUpdateToken(); loadUpdate();
+  } catch (e) { showToast('Not saved: ' + e.message, false); }
+}
+
+async function clearUpdateToken() {
+  try {
+    await nodeCall('POST', '/api/settings/update-token', { clear: true });
+    showToast('Token removed', true);
+    loadUpdateToken(); loadUpdate();
+  } catch (e) { showToast('Not removed: ' + e.message, false); }
+}
+
 loadCapability();
 loadUpdate();
 loadMicrosoft();
+loadUpdateToken();
 loadAgents();
 loadModels();
-SSAI.register({ addMachine, changePassword, clearMicrosoft, deleteNode, recheckModel, revokeNode, saveMicrosoft, saveModelKey, saveRouting, signOut, toggleAgent, toggleModel });
+SSAI.register({ addMachine, changePassword, clearMicrosoft, clearUpdateToken, deleteNode, recheckModel, revokeNode, saveMicrosoft, saveModelKey, saveRouting, saveUpdateToken, signOut, toggleAgent, toggleModel });
 loadNodes();
 </script>
 
