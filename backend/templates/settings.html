@@ -3,6 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
+<link rel="icon" href="/static/favicon.ico">
 <title>SwarmSentinel — AI Routing Settings</title>
 <style>
   :root {
@@ -152,6 +153,20 @@
     @media (max-width: 560px) { #model-list, #agent-list { grid-template-columns: 1fr; } }
   </style>
   <div id="model-list"></div>
+
+  <div class="section-title" style="margin-top:34px">Microsoft Copilot and Teams (optional) &mdash; connect your own Microsoft 365 tenant so a Copilot or Teams bot can report status and let named people approve blocks. You need an Entra app registration and an Azure Bot of your own; nothing is sent to Microsoft until you fill this in and start the Copilot service.</div>
+  <div class="agent-card" id="ms-card">
+    <div class="agent-hdr"><div class="agent-name">Entra ID and Azure bot</div><div class="agent-sev" id="ms-state">Loading&hellip;</div></div>
+    <div class="field-row"><label>Tenant ID (Entra admin center, Overview)</label><input type="text" id="ms-tenant" placeholder="11111111-2222-3333-4444-555555555555" autocomplete="off"></div>
+    <div class="field-row"><label>Application (client) ID of the bot's app registration</label><input type="text" id="ms-app" placeholder="11111111-2222-3333-4444-555555555555" autocomplete="off"></div>
+    <div class="field-row"><label>Client secret VALUE</label><input type="password" id="ms-secret" placeholder="saved (paste to replace)" autocomplete="off"></div>
+    <div class="field-row"><label>Token audience (usually the same client ID, or api://...; comma separated)</label><input type="text" id="ms-audience" placeholder="same as the client ID" autocomplete="off"></div>
+    <div class="field-row"><label>People who may approve blocks: Entra object IDs, comma separated</label><input type="text" id="ms-approvers" placeholder="object ids" autocomplete="off"></div>
+    <div class="field-row"><label>This hub's address as the bot reaches it</label><input type="text" id="ms-hub" placeholder="http://192.168.1.10:5000" autocomplete="off"></div>
+    <div class="hint" style="margin:8px 0">Saving restarts the dashboard for a few seconds. The client secret and the lane key are never shown again. The Copilot service is started separately (see copilot/README.md) and reads these values when it starts. Leave a box empty to keep what is saved.</div>
+    <button class="save-btn" data-on-click="saveMicrosoft">Save Microsoft settings</button>
+    <button class="save-btn" data-on-click="clearMicrosoft">Remove all Microsoft settings</button>
+  </div>
 
   <div class="section-title" style="margin-top:34px">AI routing for the local-LLM analyzer agents — only used while those agents are switched on. Which AI model handles which severity tier — edits write to the shared .env and restart the agent runner.</div>
   <div id="agent-cards"></div>
@@ -378,8 +393,13 @@ function modelCard(m) {
 
 async function toggleModel(id, enabled) {
   try {
-    await nodeCall('POST', '/api/setup/enable', { provider_id: id, enabled });
-    showToast(`${id} ${enabled ? 'switched on' : 'switched off'}`, true);
+    const r = await nodeCall('POST', '/api/setup/enable', { provider_id: id, enabled });
+    if (enabled && r.active === false) {
+      // On is only half of it: the voice also needs a key (cloud models) or a model server on this machine (local models).
+      showToast(`${id} is switched on but cannot answer yet. A cloud model needs its key (paste it in its card). A local model needs Ollama and its models on this machine: run  sudo deploy/get-models.sh`, false);
+    } else {
+      showToast(`${id} ${enabled ? 'switched on' : 'switched off'}`, true);
+    }
     loadModels();
   } catch (e) { showToast('Could not change ' + id + ': ' + e.message, false); }
 }
@@ -445,11 +465,45 @@ async function loadUpdate() {
   } catch (e) { /* no notice if GitHub cannot be reached */ }
 }
 
+async function loadMicrosoft() {
+  try {
+    const m = await nodeCall('GET', '/api/settings/microsoft');
+    document.getElementById('ms-tenant').value = m.tenant_id || '';
+    document.getElementById('ms-app').value = m.app_id || '';
+    document.getElementById('ms-audience').value = m.audience || '';
+    document.getElementById('ms-approvers').value = (m.approvers || []).join(', ');
+    document.getElementById('ms-hub').value = m.hub_url || '';
+    document.getElementById('ms-secret').placeholder = m.app_secret_set ? 'saved (paste to replace)' : 'paste the secret value';
+    document.getElementById('ms-state').textContent = m.approvals_from_teams ? 'approvals from Teams: on' : (m.app_id ? 'saved, approvals not complete' : 'not set up');
+  } catch (e) { document.getElementById('ms-state').textContent = 'could not load: ' + e.message; }
+}
+
+async function saveMicrosoft() {
+  const v = id => document.getElementById(id).value.trim();
+  const body = { tenant_id: v('ms-tenant'), app_id: v('ms-app'), app_secret: v('ms-secret'), audience: v('ms-audience'), approvers: v('ms-approvers'), hub_url: v('ms-hub') };
+  try {
+    const r = await nodeCall('POST', '/api/settings/microsoft', body);
+    document.getElementById('ms-secret').value = '';
+    showToast('Saved' + (r.restarting ? ': the dashboard restarts in a moment' : ''), true);
+    if (r.restarting) setTimeout(loadMicrosoft, 6000); else loadMicrosoft();
+  } catch (e) { showToast('Not saved: ' + e.message, false); }
+}
+
+async function clearMicrosoft() {
+  if (!confirm('Remove every Microsoft setting from this hub and from copilot/.env? Approvals from Teams and the Copilot lane switch off.')) return;
+  try {
+    const r = await nodeCall('POST', '/api/settings/microsoft', { clear: true });
+    showToast('Removed' + (r.restarting ? ': the dashboard restarts in a moment' : ''), true);
+    setTimeout(loadMicrosoft, r.restarting ? 6000 : 0);
+  } catch (e) { showToast('Not removed: ' + e.message, false); }
+}
+
 loadCapability();
 loadUpdate();
+loadMicrosoft();
 loadAgents();
 loadModels();
-SSAI.register({ addMachine, changePassword, deleteNode, recheckModel, revokeNode, saveModelKey, saveRouting, signOut, toggleAgent, toggleModel });
+SSAI.register({ addMachine, changePassword, clearMicrosoft, deleteNode, recheckModel, revokeNode, saveMicrosoft, saveModelKey, saveRouting, signOut, toggleAgent, toggleModel });
 loadNodes();
 </script>
 

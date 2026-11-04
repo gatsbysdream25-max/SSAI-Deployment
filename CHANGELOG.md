@@ -1,6 +1,24 @@
 # Changelog
 
-## Unreleased (2026-11-03)
+## Unreleased (2026-11-04)
+
+### A clean install on a real VM, and what it showed
+- Settings has a **Microsoft Copilot and Teams** card: a person adds their own Entra tenant ID, the bot's application (client) ID
+  and secret, the token audience and the people who may approve blocks. The hub's values go to `.env`, the bot's to
+  `copilot/.env` (owner-only), with one shared lane key made for both. Secrets are never sent back to the page. Saving restarts the
+  dashboard a few seconds later so every worker reads them. Nothing contacts Microsoft until the Copilot service is started
+  (`copilot/README.md`); the Teams sign-in step itself has still not been tried against a real tenant.
+- A provider key that cannot be saved now says why ("Permission denied: ...") and gives the fix, instead of "Failed to write .env".
+  Switching a model on that cannot answer yet (no key, or no local model server) says so and says what to do.
+- The installer no longer warns "not a git checkout: deploy/update.sh cannot update this install" on an unpacked release, which
+  it can update.
+- A SwarmSentinel icon: a menu entry (and a Desktop icon when there is a Desktop folder) that opens the dashboard on Linux hubs
+  (`--no-launcher` skips it); a "SwarmSentinel Dashboard" icon on the Desktop and in the Start menu on Windows
+  (`-DesktopIcon Off`, `-StartMenu Off` skip them); the logo on `ssai-agent.exe` and as the browser tab icon. Windows will not
+  let a program pin itself to Start: right-click the entry in Start and choose Pin to Start. Starting at boot already exists
+  (`-AutoStart On`, services on Linux). Windows agent is now 0.2.1.
+
+## 2026-11-03
 
 ### Windows PCs can act on findings (off by default, a person approves every action)
 - The Windows agent can carry out actions a signed-in person approves on the hub: block an address (Windows Firewall), Defender

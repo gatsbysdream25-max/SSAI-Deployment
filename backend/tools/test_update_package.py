@@ -199,6 +199,23 @@ class PackageUpdate(unittest.TestCase):
         self.assertTrue(os.path.exists(os.path.join(self.root, 'only_in_old.txt')), 'files the new version removed come back')
         self.assertEqual(read(self.root, 'backend/instance/secret.txt'), 'keep me\n')
 
+    @unittest.skipIf(os.name == 'posix' and os.geteuid() == 0, 'root can overwrite anything, so this cannot be simulated as root')
+    def test_files_this_account_cannot_overwrite_stop_the_update_before_anything_changes(self):
+        """The laptop (2026-11-03): files left owned by root made `cp` fail halfway, yet the update said it had finished."""
+        _, _, api = make_package(self.work, 'v2')
+        locked = os.path.join(self.root, 'backend/app.py')
+        os.chmod(locked, 0o444)                                  # stands in for a file owned by someone else
+        result = run_updater(self.root, api)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('cannot overwrite', result.stderr)
+        self.assertIn('chown', result.stderr)
+        self.assertIn('backend/app.py', result.stderr)
+        self.assertEqual(read(self.root, 'VERSION').split()[0], 'v1')            # nothing was changed
+        self.assertFalse(os.path.exists(os.path.join(self.root, 'brand_new.txt')))
+        self.assertFalse(os.path.exists(os.path.join(self.root, '.update-backup.tar.gz')))
+        os.chmod(locked, 0o644)
+        self.assertEqual(run_updater(self.root, api).returncode, 0)               # once fixed, the same update goes through
+
     def test_update_sh_hands_a_non_git_install_to_the_package_updater(self):
         shutil.copy(os.path.join(SOURCE, 'deploy/update.sh'), os.path.join(self.root, 'deploy/update.sh'))
         _, _, api = make_package(self.work, 'v2')

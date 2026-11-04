@@ -91,6 +91,24 @@ unpack_and_inspect() {
 # list_files DIR: every file under DIR as a sorted list of relative paths.
 list_files() { ( cd "$1" && find . -type f | sed 's,^\./,,' | sort ); }
 
+# check_everything_can_be_replaced: before anything changes, make sure this account may overwrite every file the release will
+# replace. Files left owned by root (an install or repair that was run as root) used to fail halfway through the copy, and the
+# update still said it had finished. Now it stops first, says which files, and says how to fix it.
+check_everything_can_be_replaced() {
+  local path target blocked="" count=0
+  while IFS= read -r path; do
+    target="$REPO/$path"
+    if [ -e "$target" ]; then
+      [ -w "$target" ] && continue
+    elif [ ! -d "$(dirname "$target")" ] || [ -w "$(dirname "$target")" ]; then
+      continue
+    fi
+    count=$((count + 1))
+    [ "$count" -gt 5 ] || blocked="$blocked $path"
+  done < <(list_files "$NEW")
+  [ "$count" -eq 0 ] || die "this account cannot overwrite $count file(s) in $REPO (for example:$blocked); they belong to another account. Nothing was changed. Fix: sudo chown -R $(id -un): $REPO   then run the update again"
+}
+
 save_current_version() {
   local excludes=() name
   for name in "${KEEP_TOP[@]}"; do excludes+=(--exclude="./$name"); done
@@ -112,7 +130,7 @@ put_new_version_in_place() {
       rm -f "$REPO/$path"
     done <<< "$stale"
   fi
-  cp -a "$NEW"/. "$REPO"/
+  cp -a "$NEW"/. "$REPO"/ || return 1          # a copy that fails partway must not be reported as an update
   # Run as root (for instance through `wsl -u root`), the copied files would belong to root and the install's own account
   # could not update them next time. Give everything back to whoever owns the install folder.
   if [ "$(id -u)" = 0 ]; then chown -R "$(stat -c '%U:%G' "$REPO")" "$REPO"; fi
@@ -158,8 +176,9 @@ main() {
 
   DEPS_CHANGED=0
   cmp -s "$REPO/requirements.txt" "$NEW/requirements.txt" || DEPS_CHANGED=1
+  check_everything_can_be_replaced
   save_current_version
-  put_new_version_in_place
+  put_new_version_in_place || { restore_previous_version; die "copying the new version failed partway; the previous version is restored"; }
   if [ "$DEPS_CHANGED" = 1 ]; then
     log "requirements changed: installing dependencies"
     "$REPO/swarmsentinel-env/bin/pip" install --disable-pip-version-check --quiet -r requirements.txt \

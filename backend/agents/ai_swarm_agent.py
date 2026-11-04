@@ -529,6 +529,7 @@ def save_env_key(key_name: str, key_value: str) -> bool:
         log.info(f"Saved {key_name} to .env")
         return True
     except Exception as exc:
+        save_env_key.last_error = f"{type(exc).__name__}: {exc}"        # shown to the person on /setup so they can fix it
         log.error(f"Failed to save {key_name}: {exc}")
         return False
 

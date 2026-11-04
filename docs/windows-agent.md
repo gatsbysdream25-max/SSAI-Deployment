@@ -66,6 +66,11 @@ Hub side: `POST /api/nodes/<node>/actions` (a signed-in person, not an API key),
    `ssai-agent.exe`, **checks its checksum**, installs it to `C:\Program Files\SwarmSentinel`, trades the code for this
    PC's own credential, and starts the agent.
 
+The installer also puts a **SwarmSentinel Dashboard** icon on the Desktop and in the Start menu's app list. It opens the hub's
+dashboard in your browser (the agent itself has no window). Leave either out with `-DesktopIcon Off` or `-StartMenu Off`. Windows
+does not allow a program to pin itself to Start: open Start, All apps, right-click **SwarmSentinel Dashboard**, choose **Pin to Start**.
+Uninstalling removes both icons.
+
 Start at boot is a choice. The default is **on**; add `-AutoStart Off` to the command to install without it. With it off
 the agent runs now but is not started after a reboot (start it with `Start-ScheduledTask -TaskName 'SwarmSentinel
 Agent'`). Run the installer again with `-AutoStart On` or `-AutoStart Off` to change your mind later.

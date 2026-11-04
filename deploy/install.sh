@@ -36,12 +36,13 @@ Usage: deploy/install.sh [options]
   --no-sudoers           do not install the scoped sudo rules (firewall blocking and restarts from the dashboard)
   --no-start             install but do not start the services
   --no-packages          do not install missing system packages (python3-venv, curl, git, nmap, ...) with apt; just report them
+  --no-launcher          hub only: do not add the "SwarmSentinel" entry to the applications menu and the Desktop folder
   --dry-run              show what would happen and change nothing
   -h, --help             this text
 EOF
 }
 
-ROLE=hub PORT=5000 BIND="" USER_NAME="" HUB_URL="" ENROLL_CODE="${SSAI_ENROLL_CODE:-}" ENROLL_CODE_FILE="" RE_ENROLL=0 NODE_ID="" WHEELHOUSE="" STANDALONE=0 AUTOUPDATE=0 RETENTION=1 SYSTEMD=1 SUDOERS=1 START=1 PACKAGES=1 DRY=0
+ROLE=hub PORT=5000 BIND="" USER_NAME="" HUB_URL="" ENROLL_CODE="${SSAI_ENROLL_CODE:-}" ENROLL_CODE_FILE="" RE_ENROLL=0 NODE_ID="" WHEELHOUSE="" STANDALONE=0 AUTOUPDATE=0 RETENTION=1 SYSTEMD=1 SUDOERS=1 START=1 PACKAGES=1 LAUNCHER=1 DRY=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --role) ROLE="${2:-}"; shift 2 ;;
@@ -61,6 +62,7 @@ while [ $# -gt 0 ]; do
     --no-sudoers) SUDOERS=0; shift ;;
     --no-start) START=0; shift ;;
     --no-packages) PACKAGES=0; shift ;;
+    --no-launcher) LAUNCHER=0; shift ;;
     --dry-run) DRY=1; shift ;;
     -h|--help) usage; exit 0 ;;
     *) echo "Unknown option: $1" >&2; usage >&2; exit 2 ;;
@@ -128,7 +130,7 @@ if [ "$DRY" = 0 ] && [ "$(id -u)" = 0 ] && [ "$USER_NAME" != root ] && ! runuser
   die "$USER_NAME cannot write to $REPO (the folder belongs to someone else). Fix: sudo chown -R $USER_NAME: $REPO   or pass --user <the folder's owner>"
 fi
 command -v curl >/dev/null || warn "curl not found: the health check and node verification will be skipped"
-[ -d "$REPO/.git" ] || warn "not a git checkout: deploy/update.sh cannot update this install"
+[ -d "$REPO/.git" ] || [ -f "$REPO/VERSION" ] || warn "this is neither a git checkout nor an unpacked release: deploy/update.sh cannot update it"
 
 # ── 2. node: enroll with the hub (before anything is built, so a bad code stops here) ──
 set_env() {           # set KEY=value, replacing any existing line (used for the credential, which must be replaceable)
@@ -324,6 +326,36 @@ if [ "$SYSTEMD" = 1 ] && [ "$START" = 1 ] && [ "$DRY" = 0 ]; then
   sleep 3
   "$SYSTEMCTL" is-active --quiet ssai-agents || { warn "the agent runner is not running: journalctl -u ssai-agents -n 50"; exit 1; }
 fi
+
+# ── 7b. hub: a menu entry and a Desktop icon that open the dashboard (only where the person has a desktop) ──
+install_launcher() {
+  local home applications desktop url entry
+  home="$(getent passwd "$USER_NAME" | cut -d: -f6)"
+  [ -n "$home" ] && [ -d "$home" ] || return 0
+  [ -f "$REPO/deploy/assets/ssai-logo.png" ] || return 0
+  url="http://localhost:$PORT/dashboard"
+  entry="[Desktop Entry]
+Type=Application
+Name=SwarmSentinel
+Comment=Open the SwarmSentinel dashboard
+Exec=xdg-open $url
+Icon=$REPO/deploy/assets/ssai-logo.png
+Terminal=false
+Categories=Network;Security;"
+  applications="$home/.local/share/applications"
+  as_user mkdir -p "$applications"
+  printf '%s
+' "$entry" | as_user tee "$applications/swarmsentinel.desktop" >/dev/null
+  as_user chmod 644 "$applications/swarmsentinel.desktop"
+  desktop="$home/Desktop"
+  if [ -d "$desktop" ]; then
+    printf '%s
+' "$entry" | as_user tee "$desktop/SwarmSentinel.desktop" >/dev/null
+    as_user chmod 755 "$desktop/SwarmSentinel.desktop"
+  fi
+  say "added SwarmSentinel to the applications menu$([ -d "$desktop" ] && echo " and the Desktop") (it opens $url)"
+}
+if [ "$ROLE" = hub ] && [ "$LAUNCHER" = 1 ] && [ "$DRY" = 0 ] && [ "$USER_NAME" != root ]; then install_launcher || warn "could not add the menu entry (not needed to run SwarmSentinel)"; fi
 
 echo
 say "done"

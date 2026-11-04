@@ -15,6 +15,7 @@ for u in ssai-retention.timer ssai-retention.service ssai-update.timer ssai-upda
   fi
 done
 systemctl daemon-reload
+for home in /home/*; do rm -f "$home/.local/share/applications/swarmsentinel.desktop" "$home/Desktop/SwarmSentinel.desktop"; done
 rm -f /etc/sudoers.d/ssai-* && echo "removed sudo rules"
 
 if [ "$PURGE" = 1 ]; then

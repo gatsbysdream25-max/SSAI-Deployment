@@ -44,6 +44,8 @@ sent to Microsoft with every card. Everything else on a card comes from the sani
 
 ## 1. Turn the lane on at the hub
 
+Easiest: sign in to the dashboard, open **Settings**, and fill in **Microsoft Copilot and Teams** (tenant ID, the app registration's client ID and secret, and who may approve). It writes the hub's `.env` and `copilot/.env` for you and makes the shared lane key. The manual steps below do the same by hand.
+
 In the hub's `.env`, set `SSAI_COPILOT_KEY` to a long random value (at least 16 characters), then restart
 SwarmSentinel. Without it the lane is off: `/api/copilot/brief` only answers the admin key. The Copilot key opens that
 one route and nothing else.

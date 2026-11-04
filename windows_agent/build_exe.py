@@ -14,6 +14,7 @@ import sys
 import tempfile
 
 HERE = os.path.dirname(os.path.abspath(__file__))
+ICON = os.path.join(os.path.dirname(HERE), "deploy", "assets", "ssai.ico")      # the SSAI shield, shown on the exe and its shortcuts
 
 
 def build(out_folder):
@@ -21,7 +22,7 @@ def build(out_folder):
     os.makedirs(out_folder, exist_ok=True)
     with tempfile.TemporaryDirectory() as scratch:
         subprocess.run([sys.executable, "-m", "PyInstaller", "--onefile", "--clean", "--noconfirm",
-                        "--name", "ssai-agent", "--distpath", out_folder,
+                        "--name", "ssai-agent", "--icon", ICON, "--distpath", out_folder,
                         "--workpath", os.path.join(scratch, "work"), "--specpath", scratch,
                         os.path.join(HERE, "main.py")], check=True)
     exe = os.path.join(out_folder, "ssai-agent.exe")

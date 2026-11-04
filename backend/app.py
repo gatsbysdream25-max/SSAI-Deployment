@@ -39,6 +39,7 @@ from routes.copilot import copilot_bp
 from routes.nodes import nodes_bp
 from routes.node_actions import node_actions_bp
 from routes.settings import settings_bp
+from routes.microsoft import microsoft_bp
 from routes.quarantine import quarantine_bp
 from routes.allowlist import allowlist_bp
 from routes.login import login_bp, _safe_next      # sign-in routes; _safe_next is re-exported for tests
@@ -231,6 +232,7 @@ app.register_blueprint(autonomy_bp, url_prefix="/api/autonomy")      # permissio
 app.register_blueprint(allowlist_bp)                               # /api/allowlist
 app.register_blueprint(quarantine_bp)                              # /api/quarantine/import
 app.register_blueprint(settings_bp)                                # /api/settings/agents, /api/settings/ai_routing
+app.register_blueprint(microsoft_bp)                              # /api/settings/microsoft (Entra / Copilot / Teams)
 app.register_blueprint(node_actions_bp)                            # /api/node/actions/*, /api/nodes/<id>/actions*
 app.register_blueprint(nodes_bp)                                 # /api/node/*, /api/nodes/*, /api/signal*
 app.register_blueprint(login_bp)                                   # /login, /logout, /api/admin/password
@@ -965,9 +967,14 @@ def setup_activate():
     env_key = reg.get('env_key')
     if not env_key:
         return jsonify({'error': 'no env_key for this provider'}), 400
+    save_env_key.last_error = ''
     ok = save_env_key(env_key, key)
     if not ok:
-        return jsonify({'error': 'Failed to write .env'}), 500
+        why = getattr(save_env_key, 'last_error', '') or 'the value was refused'
+        env_dir = os.path.dirname(os.path.abspath(_ENV_PATH))
+        hint = (f' The account that runs SwarmSentinel cannot write to {env_dir}. Fix, on this machine: '
+                f'sudo chown -R "$USER": {env_dir}') if 'ermission' in why else ''
+        return jsonify({'error': f'Could not save the key ({why}).{hint}'}), 500
     # The dashboard's AI card is rebuilt from the real panel (configured, switched on, approved), the same way every
     # other change refreshes it; hand-editing ai_capabilities here ignored the on/off switches and the approval gate
     # (code review 2026-09-30, finding 7).

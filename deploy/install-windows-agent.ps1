@@ -7,7 +7,10 @@
   (hub dashboard -> Settings -> Machines -> New enrollment code).
   What it does: downloads ssai-agent.exe from the latest SSAI-Deployment release and checks its checksum, copies it to
   Program Files, enrolls this PC with the hub, and registers a Windows scheduled task that starts the agent at every boot
-  as SYSTEM. Nothing needs Python. Remove it any time with -Uninstall.
+  as SYSTEM. It also adds a "SwarmSentinel Dashboard" icon to the Desktop and to the Start menu (it opens the hub's
+  dashboard in your browser). Nothing needs Python. Remove it any time with -Uninstall.
+  Pin to Start: Windows does not let a program pin itself. Open Start, All apps, right-click SwarmSentinel Dashboard,
+  choose Pin to Start.
 
 .EXAMPLE
   .\install-windows-agent.ps1 -HubUrl http://192.168.1.20:5000 -EnrollCode ABCD-EFGH-JKLM-NPQR
@@ -24,6 +27,8 @@ param(
     [string]$EnrollCode,
     [string]$NodeId,
     [ValidateSet("On", "Off")][string]$AutoStart = "On",   # On: start at every boot. Off: only when you start it by hand
+    [ValidateSet("On", "Off")][string]$DesktopIcon = "On", # On: a "SwarmSentinel Dashboard" icon on the Desktop (all users)
+    [ValidateSet("On", "Off")][string]$StartMenu = "On",   # On: the same entry in the Start menu's app list
     [string]$ExePath,                                   # use this exe instead of downloading (offline or testing)
     [string]$Repo = "gatsbysdream25-max/SSAI-Deployment",
     [switch]$Uninstall,
@@ -62,8 +67,44 @@ function Lift-Blocks {
     }
 }
 
+function Get-ShortcutFolders {
+    @{ Desktop = [Environment]::GetFolderPath("CommonDesktopDirectory")
+       Start   = Join-Path $env:ProgramData "Microsoft\Windows\Start Menu\Programs\SwarmSentinel" }
+}
+
+function Remove-Shortcuts {
+    $folders = Get-ShortcutFolders
+    Remove-Item -Force -ErrorAction SilentlyContinue (Join-Path $folders.Desktop "SwarmSentinel Dashboard.url")
+    Remove-Item -Recurse -Force -ErrorAction SilentlyContinue $folders.Start
+}
+
+# The dashboard address is the hub's address from this PC's own settings file (the agent talks to <hub>/api).
+function Get-DashboardUrl {
+    $settingsFile = Join-Path $DataDir "agent.json"
+    if (-not (Test-Path $settingsFile)) { return $null }
+    $api = (Get-Content -Raw $settingsFile | ConvertFrom-Json).api
+    if (-not $api) { return $null }
+    return ($api -replace '/api/?$', '') + "/dashboard"
+}
+
+function Write-Shortcut($folder, $url) {
+    New-Item -ItemType Directory -Force -Path $folder | Out-Null
+    $lines = @("[InternetShortcut]", "URL=$url", "IconFile=$Exe", "IconIndex=0")
+    Set-Content -Path (Join-Path $folder "SwarmSentinel Dashboard.url") -Value $lines -Encoding ASCII
+}
+
+function Register-Shortcuts {
+    Remove-Shortcuts                                    # this run decides which ones exist
+    $url = Get-DashboardUrl
+    if (-not $url) { Say "No hub address found, so no dashboard icon was made"; return }
+    $folders = Get-ShortcutFolders
+    if ($DesktopIcon -eq "On") { Write-Shortcut $folders.Desktop $url; Say "Added the SwarmSentinel Dashboard icon to the Desktop" }
+    if ($StartMenu -eq "On")   { Write-Shortcut $folders.Start $url;   Say "Added SwarmSentinel to the Start menu (to pin it: right-click it in Start, Pin to Start)" }
+}
+
 function Remove-Agent {
     Say "Stopping and removing the agent"
+    Remove-Shortcuts
     Lift-Blocks
     Stop-Agent
     if (Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue) {
@@ -158,4 +199,5 @@ $verified = Get-VerifiedExe
 Install-Files $verified
 Enroll-This-Pc
 Register-StartupTask
+Register-Shortcuts
 Show-Result
