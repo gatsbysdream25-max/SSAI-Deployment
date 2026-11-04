@@ -32,10 +32,10 @@ class StateLocation(unittest.TestCase):
         self.assertEqual(SW._WEIGHTS_PATH, os.path.join(inst, 'ai_weights.json'))
 
     def test_a_choice_survives_because_it_is_written_to_the_data_dir(self):
-        C.set_agent_enabled('OllamaAnalyzerAgent', True)
+        C.set_agent_enabled('LocalAnalyzerAgent', True)
         self.assertTrue(os.path.exists(os.path.join(_TMP, 'backend', 'instance', 'agents.json')))
         C._cache.update(mtime=None, data={})
-        self.assertTrue(C.agent_enabled('OllamaAnalyzerAgent'))
+        self.assertTrue(C.agent_enabled('LocalAnalyzerAgent'))
         os.remove(C._PATH)
         C._cache.update(mtime=None, data={})
 
@@ -51,16 +51,18 @@ class Roles(unittest.TestCase):
 
     def test_default_is_hub_and_runs_the_full_default_set(self):
         self.assertEqual(C.role(), 'hub')
-        for name in ('NetworkScanAgent', 'SwarmConsensusAgent', 'AuthLogAgent', 'PiHoleAgent'):
-            self.assertTrue(C.agent_enabled(name, {}), name)
+        with mock.patch.dict(os.environ, {'PIHOLE_IP': '10.0.0.2', 'PIHOLE_PASSWORD': 'x'}), \
+                mock.patch.object(C.shutil, 'which', return_value='/usr/bin/nmap'):
+            for name in ('NetworkScanAgent', 'SwarmConsensusAgent', 'AuthLogAgent', 'PiHoleAgent'):
+                self.assertTrue(C.agent_enabled(name, {}), name)
 
     def test_node_runs_host_sensors_but_not_the_hub_jobs(self):
         os.environ['SSAI_ROLE'] = 'node'
         self.assertEqual(C.role(), 'node')
         for name in C.HUB_ONLY:
             self.assertFalse(C.agent_enabled(name, {}), name)
-        for name in ('AuthLogAgent', 'SyslogAgent', 'PortMonitorAgent', 'ProcessMonitorAgent', 'NetworkConnAgent',
-                     'FileIntegrityAgent', 'DiskSpaceAgent', 'ServiceWatchAgent', 'IntelFeedAgent'):
+        for name in ('AuthLogAgent', 'SyslogAgent', 'SocketWatchAgent', 'ProcessMonitorAgent',
+                     'HostHealthAgent', 'IntelFeedAgent'):
             self.assertTrue(C.agent_enabled(name, {}), name)
 
     def test_operator_choice_beats_role_and_junk_role_means_hub(self):

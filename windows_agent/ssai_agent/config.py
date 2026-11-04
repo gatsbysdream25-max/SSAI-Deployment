@@ -60,8 +60,26 @@ def save_settings(settings):
     (locking first would lock the writer out of its own folder)."""
     folder = data_folder()
     os.makedirs(folder, exist_ok=True)
-    util.write_json(settings_path(), {"api": settings.api, "node_id": settings.node_id, "token": settings.token})
+    kept = util.read_json(settings_path(), {})             # keep what the operator set by hand (like "response")
+    kept.update({"api": settings.api, "node_id": settings.node_id, "token": settings.token})
+    util.write_json(settings_path(), kept)
     util.lock_to_administrators(folder)
+
+
+RESPONSE_MODES = ("off", "approve")
+
+
+def response_mode():
+    """Whether this PC's agent may carry out actions a person approved on the hub. 'off' (the default) means it never even
+    asks. Only someone with administrator rights on this PC can change it (the folder is locked); the hub cannot."""
+    mode = str(util.read_json(settings_path(), {}).get("response", "off")).strip().lower()
+    return mode if mode in RESPONSE_MODES else "off"
+
+
+def save_response_mode(mode):
+    saved = util.read_json(settings_path(), {})
+    saved["response"] = mode
+    util.write_json(settings_path(), saved)
 
 
 def default_node_id():

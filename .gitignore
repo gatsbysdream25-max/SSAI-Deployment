@@ -20,6 +20,7 @@ security/scans/
 !docker/docker-entrypoint.sh
 !docker/run-github-reporter.sh
 !deploy/*.sh
+!deploy/*.ps1
 !deploy/kit/*.sh
 deploy/rendered/
 .update.lock

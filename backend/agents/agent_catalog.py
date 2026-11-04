@@ -8,6 +8,7 @@ has not shown it earns them is OFF by default and offered in the menu as an opt-
 """
 import json
 import os
+import shutil
 from datetime import datetime, timezone
 from typing import Dict, Optional
 
@@ -35,26 +36,16 @@ CATALOG: Dict[str, dict] = {
                                       "Rarely fires (0 findings in 30 days) but costs almost nothing."},
     "PiHoleAgent":          {"tier": "core", "default_on": True,
                              "notes": "DNS view from Pi-hole: unusual blocking rates. Needs PIHOLE_IP and PIHOLE_PASSWORD, otherwise it stays idle."},
-    "PortMonitorAgent":     {"tier": "core", "default_on": True,
-                             "notes": "Listening-port changes on this host."},
     "ProcessMonitorAgent":  {"tier": "core", "default_on": True,
                              "notes": "Suspicious processes such as reverse shells and miners."},
-    "NetworkConnAgent":     {"tier": "core", "default_on": True,
-                             "notes": "Established outbound connections to known-bad ports."},
-    "ServiceWatchAgent":    {"tier": "core", "default_on": True,
-                             "notes": "Critical systemd services stopping unexpectedly."},
-    "FileIntegrityAgent":   {"tier": "core", "default_on": True,
-                             "notes": "Changes to critical system files, including deletions."},
-    "DiskSpaceAgent":       {"tier": "core", "default_on": True,
-                             "notes": "Low disk space on this host."},
     "EmailQuarantineAgent": {"tier": "core", "default_on": True,
                              "notes": "Ingests the phishing-quarantine drop box."},
-    "BrowserExtAgent":      {"tier": "core", "default_on": True,
-                             "notes": "Represents the browser extensions that report in."},
-    "ThreatFeedAgent":      {"tier": "optional", "default_on": False,
-                             "notes": "Posts a few public URLhaus listings every 15 min as 'info' rows (feed samples, not events on your "
-                                      "network). Off by default: IntelFeedAgent now loads URLhaus into the local store and raises a "
-                                      "threat only when a device here looks up a listed site."},
+    "SocketWatchAgent":     {"tier": "core", "default_on": True,
+                             "notes": "Listening ports and live outbound connections on this host: new unexpected listeners, connections to "
+                                      "ports malware uses, and connections to anything the threat feeds list."},
+    "HostHealthAgent":      {"tier": "core", "default_on": True,
+                             "notes": "Critical systemd services stopping, full disks and changes to critical system files, in one pass. "
+                                      "The service check is skipped on a machine without systemd."},
     "IntelFeedAgent":       {"tier": "intel", "default_on": True,
                              "notes": "Loads free abuse.ch feeds (ThreatFox, Feodo Tracker: CC0, no key) into a local store; the connection and DNS "
                                       "agents raise a threat only when a device on your network touches a listed indicator."},
@@ -65,20 +56,26 @@ CATALOG: Dict[str, dict] = {
                                       "never one family agreeing with itself. Set SSAI_VERIFIER_PROVIDER to reserve a model for it."},
     "RemediationSweepAgent": {"tier": "core", "default_on": True,
                              "notes": "Expires unapproved remediation proposals and auto-reverts an approved block once its TTL passes."},
-    "OllamaAnalyzerAgent":  {"tier": "optional", "default_on": False,
-                             "notes": "Local-LLM analysis of high-severity threats. Off by default: it has analyzed 5 threats ever and the "
-                                      "local models tried so far score poorly. Useful for air-gapped installs."},
-    "HermesAnalyzerAgent":  {"tier": "optional", "default_on": False,
-                             "notes": "Local-LLM analysis of medium threats (hermes3, about 40 s of CPU each). Off by default: 30% false alarms "
-                                      "on the benchmark. Air-gapped installs only."},
     "RedTeamAgent":         {"tier": "core", "default_on": True,
                              "notes": "Attacks SSAI itself every 6 hours (data leaks through the cloud gate, a spoofed AI voice, prompt "
                                       "injection, AI-triggered actions) using the real code with fake data: no network, no changes. "
                                       "A probe that starts failing raises a high finding. Results: instance/redteam_audit.jsonl."},
-    "WatchtowerAnalyzerAgent": {"tier": "optional", "default_on": False,
-                             "notes": "Local-LLM triage of LOW-severity threats (mistral, about 45 s of CPU each). Off by default: near-zero "
-                                      "accuracy on the benchmark, and its 37,000-row backlog can never clear."},
+    "LocalAnalyzerAgent":   {"tier": "optional", "default_on": False,
+                             "notes": "Local-LLM analysis of high, medium and low severity threats through Ollama (one agent; each tier has its "
+                                      "own model, set in Settings). Off by default: the local models tried so far score poorly "
+                                      "(30% false alarms on medium, near-zero accuracy on low). Useful for air-gapped installs."},
 }
+
+# Agents merged into others or removed (2026-11-03). Their dashboard rows are deleted when the hub starts, so the count
+# shows only agents that exist. A machine still running an old build re-registers them, and they go again at the next start.
+RETIRED = frozenset({
+    "PortMonitorAgent", "NetworkConnAgent", "ServiceWatchAgent", "DiskSpaceAgent", "FileIntegrityAgent",
+    "OllamaAnalyzerAgent", "HermesAnalyzerAgent", "WatchtowerAnalyzerAgent", "ThreatFeedAgent", "BrowserExtAgent",
+    "WinSecurityAgent", "WinDiskAgent",
+})
+
+
+LEGACY_ANALYZERS = ("OllamaAnalyzerAgent", "HermesAnalyzerAgent", "WatchtowerAnalyzerAgent")
 
 
 def load_overrides(path: Optional[str] = None) -> Dict[str, bool]:
@@ -99,6 +96,9 @@ def load_overrides(path: Optional[str] = None) -> Dict[str, bool]:
                 data[str(name)] = val
     except (OSError, ValueError, AttributeError):
         data = {}
+    # A choice made for one of the three analyzers that LocalAnalyzerAgent replaced carries over: switched on before means on now.
+    if "LocalAnalyzerAgent" not in data and any(data.get(old) for old in LEGACY_ANALYZERS):
+        data["LocalAnalyzerAgent"] = True
     if path == _PATH:
         _cache.update(mtime=mtime, data=data)
     return data
@@ -109,10 +109,41 @@ def load_overrides(path: Optional[str] = None) -> Dict[str, bool]:
 # panels or N copies of the same reference feed. Host-level sensors (logs, ports, processes, connections, file
 # integrity, disk, services) and the feed store that the connection matcher needs run everywhere.
 HUB_ONLY = frozenset({
-    "NetworkScanAgent", "PiHoleAgent", "EmailQuarantineAgent", "BrowserExtAgent", "ThreatFeedAgent",
-    "SwarmConsensusAgent", "ConsensusVerifierAgent", "OllamaAnalyzerAgent", "HermesAnalyzerAgent", "WatchtowerAnalyzerAgent",
+    "NetworkScanAgent", "PiHoleAgent", "EmailQuarantineAgent",
+    "SwarmConsensusAgent", "ConsensusVerifierAgent", "LocalAnalyzerAgent",
     "RemediationSweepAgent", "RedTeamAgent",
 })
+
+
+def _needs_env(*names):
+    """A check that passes when every named environment variable is set."""
+    def check():
+        missing = [n for n in names if not os.environ.get(n, "").strip()]
+        return f"{' and '.join(missing)} not set" if missing else ""
+    return check
+
+
+def _needs_program(program):
+    """A check that passes when the program is installed."""
+    def check():
+        return "" if shutil.which(program) else f"{program} is not installed here"
+    return check
+
+
+# What a machine must have for an agent to be worth running. An agent whose need is missing stays off and is not
+# offered as an option (an operator's explicit switch still wins). This is how one build runs on any network: a
+# laptop with no Pi-hole never starts the Pi-hole agent, and one that later gets PIHOLE_IP/PIHOLE_PASSWORD in .env
+# starts it within ~30 s. Each check returns "" when satisfied, or a short reason.
+REQUIRES = {
+    "PiHoleAgent": _needs_env("PIHOLE_IP", "PIHOLE_PASSWORD"),
+    "NetworkScanAgent": _needs_program("nmap"),
+}
+
+
+def unmet_requirement(name: str) -> str:
+    """Why this agent cannot usefully run on this machine ('' when it can)."""
+    check = REQUIRES.get(name)
+    return check() if check else ""
 
 
 def role() -> str:
@@ -121,13 +152,15 @@ def role() -> str:
 
 
 def agent_enabled(name: str, overrides: Optional[Dict[str, bool]] = None) -> bool:
-    """Should this agent run? The operator's choice wins; then the machine's role; then the catalog default;
-    unknown agents run."""
+    """Should this agent run? The operator's choice wins; then the machine's role; then whether the machine has
+    what the agent needs (REQUIRES); then the catalog default; unknown agents run."""
     if overrides is None:
         overrides = load_overrides()
     if name in overrides:
         return bool(overrides[name])
     if role() == "node" and name in HUB_ONLY:
+        return False
+    if unmet_requirement(name):
         return False
     meta = CATALOG.get(name)
     return bool(meta["default_on"]) if meta else True

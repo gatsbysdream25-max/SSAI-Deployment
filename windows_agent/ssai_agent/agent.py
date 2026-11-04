@@ -5,6 +5,7 @@ never silences the whole PC.
 """
 import logging
 import os
+import threading
 import time
 from datetime import datetime, timezone
 
@@ -22,8 +23,9 @@ def interval_scale():
 
 
 class AgentRunner:
-    def __init__(self, client, state, sensors, clock=time.monotonic):
+    def __init__(self, client, state, sensors, clock=time.monotonic, responder=None):
         self.client = client
+        self.responder = responder        # carries out actions a person approved on the hub (response.py); None = never
         self.state = state
         self.sensors = sensors
         self.clock = clock
@@ -87,6 +89,8 @@ class AgentRunner:
         """Loop until stop_event is set (Ctrl-C, or the Windows task being stopped)."""
         self.register_all()
         log.info("watching with %d sensors", len(self.sensors))
+        if self.responder is not None:       # its own thread: a slow Defender scan must not stop the sensors
+            threading.Thread(target=self.responder.run_forever, args=(stop_event,), daemon=True, name="response").start()
         while not stop_event.is_set():
             self.run_due()
             if self.client.credential_rejected:

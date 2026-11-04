@@ -1,5 +1,56 @@
 # Changelog
 
+## Unreleased (2026-11-03)
+
+### Windows PCs can act on findings (off by default, a person approves every action)
+- The Windows agent can carry out actions a signed-in person approves on the hub: block an address (Windows Firewall), Defender
+  scan / removal, stop a process, isolate the PC, block a domain (hosts file). It asks the hub every 30 s (no listening port),
+  runs only a fixed list, undoes every network change after its time limit from a list on disk, and never blocks the hub, the
+  gateway, DNS servers or anything inside the organisation. Enable per PC: `ssai-agent.exe response approve` (default `off`; the
+  hub cannot switch it on). Hub: `NodeAction` table, `node_actions.py`, `routes/node_actions.py`. See `docs/windows-agent.md`.
+  No dashboard button yet, and there is no automatic mode.
+- Review fixes: isolating a PC is refused unless the agent starts at boot (only the agent can lift it); the installer and
+  `ssai-agent.exe response --lift-all` undo blocks and isolation before the agent is removed or boot-start is turned off;
+  the agent never blocks the hub's own name or a parent of it; queueing an action always needs a signed-in person, even when
+  `SSAI_APPROVAL_REQUIRES_PERSON=0` lets the admin key approve blocks.
+
+### Fewer agents (29 -> 20)
+- Hub agents 21 -> 14: `SocketWatchAgent` replaces `PortMonitorAgent` + `NetworkConnAgent` (one `ss` pass; listeners every
+  2nd cycle); `HostHealthAgent` replaces `ServiceWatchAgent` + `DiskSpaceAgent` + `FileIntegrityAgent`;
+  `LocalAnalyzerAgent` replaces the Ollama, Hermes and Watchtower analyzers (same three models and severity tiers, still
+  off by default). `ThreatFeedAgent` is gone (`IntelFeedAgent` already loads URLhaus into the local store) and so is
+  `BrowserExtAgent`, which only sent heartbeats for the browser extension.
+- Windows agent 8 -> 6 sensors: `WinSecurityAgent` is part of `WinDefenderAgent`, `WinDiskAgent` part of `WinStabilityAgent`.
+- An agent whose machine has nothing for it to watch now stays off by itself and is not offered in Settings: `PiHoleAgent`
+  needs `PIHOLE_IP` and `PIHOLE_PASSWORD`, `NetworkScanAgent` needs `nmap`. It starts within ~30 s once that is in place,
+  and an operator's explicit switch still wins. One build therefore fits any network.
+- Findings already stored keep the old `detected_by` names; new ones use the merged agent's name. The hub deletes the
+  dashboard rows of retired agents when it starts (`agent_catalog.RETIRED`), so the count shows only agents that exist.
+  A machine still running an old build re-registers them until it is updated.
+- A switch an operator made for the Ollama, Hermes or Watchtower analyzer (on) carries over to `LocalAnalyzerAgent`.
+  The three tiers now run together; they can no longer be switched separately.
+- The dashboard's agent pane lists a Windows PC's sensors in their own group, "<host> (Windows)", without the `@node` suffix.
+- Windows agent: `WinEventAgent` no longer reports "Windows flagged N PowerShell script(s) as suspicious" for the agent's own
+  PowerShell. Loading Windows' network module (`Get-NetTCPConnection`) writes ~38 generated wrapper scripts to the PowerShell
+  log at warning level, and the port sensor did that every 2 minutes. The agent now remembers the process ids it started and
+  skips warnings from those; it matches on process id, not script text, so malware cannot hide by copying text.
+
+## Unreleased (2026-11-01)
+
+### Windows install
+- `deploy/install-windows-docker.ps1`: one command sets up WSL2, Docker Engine inside Ubuntu (no Docker Desktop),
+  the hub (`docker compose up -d --build`), a keep-WSL-alive task, and the native Windows agent enrolled to that hub.
+  `-CheckOnly` changes nothing. Not yet run end to end on a real PC.
+- `deploy/install-windows-agent.ps1`: installs `ssai-agent.exe` (checksum checked), enrolls it, locks its data folder
+  and runs it as SYSTEM at boot. The Settings page and `docs/windows-agent.md` already pointed at this script; it had
+  never been committed because `.gitignore` excluded every `*.ps1` (now excepted under `deploy/`).
+
+### Windows agent
+- Three new sensors: `WinDefenderAgent` (Defender detections; ransomware and attack-surface protection status),
+  `WinEventAgent` (new services, accounts, Administrators-group changes, cleared logs, scheduled tasks, PowerShell
+  scripts Windows flags) and `WinStabilityAgent` (blue screens, unexpected shutdowns, WHEA hardware errors, repeated
+  crashes). Details in `docs/windows-agent.md`.
+
 ## Unreleased (2026-10-18)
 
 ### Pre-pilot hardening

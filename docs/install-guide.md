@@ -2,6 +2,22 @@
 
 SwarmSentinel runs on almost any machine. **How much it can protect depends on the machine**, and it tells you plainly (Settings, "Protection level", or `python3 backend/agents/capability.py`). This page helps you pick the install route first, then explains the four levels.
 
+## The fastest way: one line
+
+On Ubuntu or Debian, one command downloads the newest release, checks it, unpacks it and installs it. Nothing to clone or edit first:
+
+```bash
+curl -fsSL https://github.com/gatsbysdream25-max/SSAI-Deployment/releases/latest/download/get-ssai.sh | sudo bash
+```
+
+That makes a hub on this machine, and shows the new admin password once at the end. To make this machine report to a hub you already run, create a code on the hub (Settings, Machines) and add its options:
+
+```bash
+curl -fsSL https://github.com/gatsbysdream25-max/SSAI-Deployment/releases/latest/download/get-ssai.sh | sudo bash -s -- --role node --hub-url http://HUB:5000 --enroll-code CODE
+```
+
+Options after `--` go to the installer (`--standalone`, `--port`, `--bind` and the rest of `deploy/install.sh --help`). Two more belong to the one-liner: `--dir FOLDER` (where to unpack; default is `SwarmSentinel` in your home folder) and `--version TAG` (an older release). The download must match the checksum published beside it, but the checksum does not prove who published it; signed releases are a later step. On a Windows PC, use the native agent's one-liner in [windows-agent.md](windows-agent.md). Later, update with `bash ~/SwarmSentinel/deploy/update.sh`.
+
 ## 1. Pick a route
 
 | Your machine | Use | Command |
@@ -9,6 +25,7 @@ SwarmSentinel runs on almost any machine. **How much it can protect depends on t
 | Ubuntu or Debian, with systemd (a PC, a server, a mini-PC, a VM) | **Native install**. Full protection. | `sudo deploy/install.sh` |
 | Anything that runs Docker (Windows, Mac, any Linux) | **Docker**. Dashboard and AI panel work everywhere; watching the host itself is limited, see below. | `docker compose up -d` |
 | Windows or Mac | **Docker Desktop** (above). On Windows you can also use WSL2 with Ubuntu and the native route inside it. To watch a Windows PC itself, install the **native Windows agent** (`docs/windows-agent.md`): one small program, no WSL or Python needed, reporting to a hub. There is no Mac agent yet, so on a Mac only the dashboard, the AI panel and the feeds run, not the host sensors. `deploy\install-windows.ps1 -CheckOnly` checks the PC; without `-CheckOnly` and with `-Package` it sets up WSL2, Ubuntu and the installer in one go. *(WSL2 has not been tested on a real PC yet.)* | `docker compose up -d` |
+| Windows, wanting the hub and Windows itself watched, in one go | **WSL2 + Docker + native agent**. `deploy\install-windows-docker.ps1` sets up WSL2, Docker Engine inside Ubuntu, the hub, and the Windows agent. Run it with `-CheckOnly` first. *(Not yet run end to end on a real PC.)* | `powershell -ExecutionPolicy Bypass -File deploy\install-windows-docker.ps1` |
 | A Linux machine with Docker where you want the host watched too | **Docker, host mode** | `docker compose -f docker-compose.yml -f docker-compose.linux-host.yml up -d` |
 | A small or extra machine that should report to one you already run | **Node** | `sudo deploy/install.sh --role node --hub-url http://HUB:5000 --enroll-code CODE` |
 | No internet, or showing it somewhere else | **USB kit** | see [portable-and-relocation.md](portable-and-relocation.md) |

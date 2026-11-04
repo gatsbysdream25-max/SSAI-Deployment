@@ -1,7 +1,7 @@
 FROM python:3.12-slim
 
 # nmap/iproute2/procps/ufw/git back the agents' subprocess calls
-# (NetworkScanAgent, PortMonitorAgent/NetworkConnAgent, ProcessMonitorAgent,
+# (NetworkScanAgent, SocketWatchAgent, ProcessMonitorAgent,
 # block_threat(), github_reporter.py respectively) -- none of these ship as
 # pip packages, they're real Linux binaries the code shells out to.
 # supervisor runs the three long-running processes as one container PID 1.

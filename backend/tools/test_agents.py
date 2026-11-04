@@ -48,7 +48,7 @@ class CatalogPolicy(unittest.TestCase):
             self.assertTrue(m['notes'].strip(), name)
 
     def test_local_llm_analyzers_are_off_by_default(self):
-        for name in ('OllamaAnalyzerAgent', 'HermesAnalyzerAgent', 'WatchtowerAnalyzerAgent'):
+        for name in ('LocalAnalyzerAgent',):
             self.assertFalse(C.CATALOG[name]['default_on'], name)
             self.assertEqual(C.CATALOG[name]['tier'], 'optional')
 
@@ -56,7 +56,7 @@ class CatalogPolicy(unittest.TestCase):
         self.assertEqual({n for n, m in C.CATALOG.items() if not m['default_on']}, {n for n, m in C.CATALOG.items() if m['tier'] == 'optional'})
 
     def test_cheap_detectors_and_the_ai_consensus_stay_on(self):
-        for name in ('AuthLogAgent', 'NetworkScanAgent', 'FileIntegrityAgent', 'IntelFeedAgent', 'SwarmConsensusAgent'):
+        for name in ('AuthLogAgent', 'NetworkScanAgent', 'HostHealthAgent', 'IntelFeedAgent', 'SwarmConsensusAgent'):
             self.assertTrue(C.CATALOG[name]['default_on'], name)
 
     def test_the_retired_cosmos_agent_is_gone(self):
@@ -79,16 +79,16 @@ class Overrides(unittest.TestCase):
 
     def test_precedence(self):
         self.assertTrue(C.agent_enabled('AuthLogAgent', {}))
-        self.assertFalse(C.agent_enabled('WatchtowerAnalyzerAgent', {}))
+        self.assertFalse(C.agent_enabled('LocalAnalyzerAgent', {}))
         self.assertTrue(C.agent_enabled('SomeFutureAgent', {}))                      # unknown agents run
-        self.assertTrue(C.agent_enabled('WatchtowerAnalyzerAgent', {'WatchtowerAnalyzerAgent': True}))
+        self.assertTrue(C.agent_enabled('LocalAnalyzerAgent', {'LocalAnalyzerAgent': True}))
         self.assertFalse(C.agent_enabled('AuthLogAgent', {'AuthLogAgent': False}))
 
     def test_round_trip_is_atomic_and_keeps_other_choices(self):
-        C.set_agent_enabled('HermesAnalyzerAgent', True, self.path)
+        C.set_agent_enabled('LocalAnalyzerAgent', True, self.path)
         C.set_agent_enabled('SyslogAgent', False, self.path)
-        C.set_agent_enabled('HermesAnalyzerAgent', False, self.path)
-        self.assertEqual(C.load_overrides(self.path), {'HermesAnalyzerAgent': False, 'SyslogAgent': False})
+        C.set_agent_enabled('LocalAnalyzerAgent', False, self.path)
+        self.assertEqual(C.load_overrides(self.path), {'LocalAnalyzerAgent': False, 'SyslogAgent': False})
         self.assertFalse(os.path.exists(self.path + '.tmp'))
 
     def test_default_path_cache_reflects_changes(self):
@@ -96,9 +96,9 @@ class Overrides(unittest.TestCase):
         C._PATH = self.path
         C._cache.update(mtime=None, data={})
         try:
-            self.assertFalse(C.agent_enabled('OllamaAnalyzerAgent'))
-            C.set_agent_enabled('OllamaAnalyzerAgent', True)
-            self.assertTrue(C.agent_enabled('OllamaAnalyzerAgent'))
+            self.assertFalse(C.agent_enabled('LocalAnalyzerAgent'))
+            C.set_agent_enabled('LocalAnalyzerAgent', True)
+            self.assertTrue(C.agent_enabled('LocalAnalyzerAgent'))
         finally:
             C._PATH = orig
             C._cache.update(mtime=None, data={})
@@ -188,17 +188,115 @@ class Lifecycle(unittest.TestCase):
             t.join(timeout=2)
 
 
-class ServiceWatchWithoutSystemd(unittest.TestCase):
+class HostHealthWithoutSystemd(unittest.TestCase):
     def test_a_machine_with_no_systemctl_is_skipped_quietly_not_failed_every_minute(self):
         from unittest import mock
-        agent = R.ServiceWatchAgent.__new__(R.ServiceWatchAgent)
+        agent = R.HostHealthAgent.__new__(R.HostHealthAgent)
         agent.log = mock.Mock()
-        agent.setup()
+        agent._states, agent._told_no_systemd = {}, False   # not setup(): that would baseline the real critical files
         with mock.patch.object(R.shutil, 'which', return_value=None), mock.patch.object(R.subprocess, 'run') as run:
-            agent.scan()
-            agent.scan()
+            agent._check_services()
+            agent._check_services()
         run.assert_not_called()                       # nothing was attempted
         self.assertEqual(agent.log.info.call_count, 1)  # and it said so only once
+
+
+class Requirements(unittest.TestCase):
+    """An agent with nothing to watch on this machine stays off by itself (a laptop with no Pi-hole)."""
+
+    def setUp(self):
+        from unittest import mock
+        self.mock = mock
+
+    def test_pihole_agent_needs_a_pihole_to_be_configured(self):
+        with self.mock.patch.dict(os.environ, {'PIHOLE_IP': '', 'PIHOLE_PASSWORD': ''}):
+            self.assertIn('PIHOLE_IP', C.unmet_requirement('PiHoleAgent'))
+            self.assertFalse(C.agent_enabled('PiHoleAgent', {}))
+        with self.mock.patch.dict(os.environ, {'PIHOLE_IP': '10.0.0.2', 'PIHOLE_PASSWORD': ''}):
+            self.assertEqual(C.unmet_requirement('PiHoleAgent'), 'PIHOLE_PASSWORD not set')
+            self.assertFalse(C.agent_enabled('PiHoleAgent', {}))
+        with self.mock.patch.dict(os.environ, {'PIHOLE_IP': '10.0.0.2', 'PIHOLE_PASSWORD': 'x'}):
+            self.assertEqual(C.unmet_requirement('PiHoleAgent'), '')
+            self.assertTrue(C.agent_enabled('PiHoleAgent', {}))
+
+    def test_network_scan_needs_nmap(self):
+        with self.mock.patch.object(C.shutil, 'which', return_value=None):
+            self.assertIn('nmap', C.unmet_requirement('NetworkScanAgent'))
+            self.assertFalse(C.agent_enabled('NetworkScanAgent', {}))
+        with self.mock.patch.object(C.shutil, 'which', return_value='/usr/bin/nmap'):
+            self.assertTrue(C.agent_enabled('NetworkScanAgent', {}))
+
+    def test_the_operator_can_still_force_an_agent_on(self):
+        with self.mock.patch.dict(os.environ, {'PIHOLE_IP': '', 'PIHOLE_PASSWORD': ''}):
+            self.assertTrue(C.agent_enabled('PiHoleAgent', {'PiHoleAgent': True}))
+
+    def test_agents_with_no_requirement_are_unaffected(self):
+        self.assertEqual(C.unmet_requirement('AuthLogAgent'), '')
+        self.assertEqual(C.unmet_requirement('SomeFutureAgent'), '')
+
+    def test_every_requirement_names_a_real_agent(self):
+        self.assertEqual(set(C.REQUIRES) - set(C.CATALOG), set())
+
+
+class MergedAgents(unittest.TestCase):
+    def test_a_switch_made_for_an_old_analyzer_carries_over_to_the_merged_one(self):
+        path = os.path.join(tempfile.mkdtemp(), 'agents.json')
+        with open(path, 'w') as f:
+            f.write('{"enabled": {"HermesAnalyzerAgent": true, "OllamaAnalyzerAgent": false}}')
+        self.assertTrue(C.load_overrides(path)['LocalAnalyzerAgent'])
+        with open(path, 'w') as f:
+            f.write('{"enabled": {"HermesAnalyzerAgent": true, "LocalAnalyzerAgent": false}}')
+        self.assertFalse(C.load_overrides(path)['LocalAnalyzerAgent'])     # an explicit choice for the new name wins
+        with open(path, 'w') as f:
+            f.write('{"enabled": {"HermesAnalyzerAgent": false}}')
+        self.assertNotIn('LocalAnalyzerAgent', C.load_overrides(path))
+
+    def test_retired_names_are_not_current_agents(self):
+        self.assertEqual(C.RETIRED & {c.name_id for c in R.AGENTS}, set())
+
+    def test_roster_is_the_consolidated_set(self):
+        names = {c.name_id for c in R.AGENTS}
+        for gone in ('PortMonitorAgent', 'NetworkConnAgent', 'ServiceWatchAgent', 'DiskSpaceAgent', 'FileIntegrityAgent',
+                     'OllamaAnalyzerAgent', 'HermesAnalyzerAgent', 'WatchtowerAnalyzerAgent', 'ThreatFeedAgent',
+                     'BrowserExtAgent'):
+            self.assertNotIn(gone, names)
+        for kept in ('SocketWatchAgent', 'HostHealthAgent', 'LocalAnalyzerAgent'):
+            self.assertIn(kept, names)
+        self.assertEqual(len(names), len(R.AGENTS), 'duplicate agent names')
+
+    def test_socket_watch_checks_listeners_every_second_cycle_and_connections_every_cycle(self):
+        from unittest import mock
+        agent = R.SocketWatchAgent.__new__(R.SocketWatchAgent)
+        agent._cycle = 0
+        with mock.patch.object(agent, '_scan_connections') as conns, mock.patch.object(agent, '_scan_listeners') as lst:
+            for _ in range(4):
+                agent.scan()
+        self.assertEqual((conns.call_count, lst.call_count), (4, 2))
+
+    def test_host_health_runs_slow_checks_on_a_timer_and_survives_a_failing_check(self):
+        from unittest import mock
+        agent = R.HostHealthAgent.__new__(R.HostHealthAgent)
+        agent.log = mock.Mock()
+        agent._slow_due = 0.0
+        with mock.patch.object(agent, '_check_services', side_effect=RuntimeError('boom')) as svc, \
+                mock.patch.object(agent, '_check_disk') as disk, mock.patch.object(agent, '_check_files') as files:
+            agent.scan()        # first look: everything runs, and the failing services check does not stop the others
+            agent.scan()        # 60 s later in real life: only the cheap check is due again
+        self.assertEqual((svc.call_count, disk.call_count, files.call_count), (2, 1, 1))
+        self.assertTrue(agent.log.error.called)
+
+    def test_local_analyzer_runs_the_slow_tier_less_often(self):
+        from unittest import mock
+        agent = R.LocalAnalyzerAgent.__new__(R.LocalAnalyzerAgent)
+        agent._next_due = {}
+        seen = []
+        with mock.patch.object(agent, '_scan_tier', side_effect=lambda t: seen.append(t['label'])), \
+                mock.patch.object(R.time, 'monotonic', side_effect=[0, 300, 600, 900]):
+            for _ in range(4):
+                agent.scan()
+        self.assertEqual(seen.count('Ollama'), 4)
+        self.assertEqual(seen.count('Hermes'), 4)
+        self.assertEqual(seen.count('Watchtower'), 2)   # at 0 s and 900 s only
 
 
 if __name__ == '__main__':

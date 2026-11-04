@@ -87,6 +87,16 @@ class AgentStaleness(unittest.TestCase):
         names = sorted(a.name for a in self.Agent.query.all())
         self.assertEqual(names, ['AuthLogAgent@laptop2', 'HubAgent'])
 
+    def test_rows_of_retired_agents_are_removed_on_start_and_live_ones_kept(self):
+        from agents.agent_catalog import RETIRED
+        for name in ('DiskSpaceAgent', 'ThreatFeedAgent', 'WinSecurityAgent@laptop', 'WinDiskAgent@laptop',
+                     'AuthLogAgent', 'HostHealthAgent', 'WinStabilityAgent@laptop'):
+            self.add_agent(name, 1)
+        self.assertEqual(self.Agent.purge_retired(RETIRED), 4)
+        self.assertEqual(sorted(a.name for a in self.Agent.query.all()),
+                         ['AuthLogAgent', 'HostHealthAgent', 'WinStabilityAgent@laptop'])
+        self.assertEqual(self.Agent.purge_retired(RETIRED), 0)
+
 
 if __name__ == '__main__':
     unittest.main()

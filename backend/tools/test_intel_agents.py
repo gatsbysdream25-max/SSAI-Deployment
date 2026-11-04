@@ -69,7 +69,7 @@ class Connections(StoreCase):
 
     def test_listed_peers_are_reported_with_process_and_severity(self):
         I.STORE.add_many([('ip', '50.16.16.211', C2), ('endpoint', '68.64.177.24:80', DELIVERY)])
-        a = build(AR.NetworkConnAgent)
+        a = build(AR.SocketWatchAgent)
         a.setup()
         self.scan(a)
         got = {s['url']: s for s in a.submitted if s['threat_type'] == 'intel-match'}
@@ -83,7 +83,7 @@ class Connections(StoreCase):
 
     def test_cooldown_stops_repeat_reports_until_it_lapses(self):
         I.STORE.add_many([('ip', '50.16.16.211', C2)])
-        a = build(AR.NetworkConnAgent)
+        a = build(AR.SocketWatchAgent)
         a.setup()
         self.scan(a)
         self.scan(a)
@@ -93,7 +93,7 @@ class Connections(StoreCase):
         self.assertEqual(sum(s['threat_type'] == 'intel-match' for s in a.submitted), 2)
 
     def test_empty_store_costs_nothing_and_reports_nothing(self):
-        a = build(AR.NetworkConnAgent)
+        a = build(AR.SocketWatchAgent)
         a.setup()
         self.scan(a)
         self.assertEqual([s for s in a.submitted if s['threat_type'] == 'intel-match'], [])

@@ -8,6 +8,8 @@ import os
 import re
 import subprocess
 import sys
+import time
+from collections import deque
 
 # Home and office address ranges. The hub and the public ledger only ever see these masked, like the Linux agents do.
 _PRIVATE_NETWORKS = [ipaddress.ip_network(n) for n in
@@ -37,15 +39,44 @@ def mask_private_ips(text):
     return _IPV4.sub(hide, text or "")
 
 
+# Process ids of the programs this agent started, newest last. The Windows event log says which process wrote an event, so a
+# sensor can tell the agent's own PowerShell (whose generated module wrappers Windows logs as "suspicious") from anyone else's.
+_own_children = deque(maxlen=4000)        # (pid, time started)
+OWN_CHILD_MINUTES = 30                    # a pid is only treated as ours this long: Windows reuses process ids
+
+
+def note_child(pid):
+    _own_children.append((pid, time.monotonic()))
+
+
+def own_child_pids():
+    """Process ids of programs this agent started in the last OWN_CHILD_MINUTES minutes."""
+    cutoff = time.monotonic() - OWN_CHILD_MINUTES * 60
+    return {pid for pid, started in _own_children if started >= cutoff}
+
+
+def run_checked(args, timeout=30):
+    """Run a Windows tool and return (exit code, what it printed, what it complained about). Never raises: a missing
+    tool or a timeout gives (-1, '', reason)."""
+    flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)       # no black console window flashing up on the desktop
+    try:
+        with subprocess.Popen(args, stdout=subprocess.PIPE, stderr=subprocess.PIPE, creationflags=flags) as proc:
+            note_child(proc.pid)
+            try:
+                out, err = proc.communicate(timeout=timeout)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                proc.communicate()
+                return -1, "", "timed out"
+    except (OSError, subprocess.SubprocessError) as error:
+        return -1, "", str(error)
+    return proc.returncode, out.decode("utf-8", errors="replace"), err.decode("utf-8", errors="replace")
+
+
 def run_command(args, timeout=30):
     """Run a Windows tool and return everything it printed as text. Never raises: a missing tool, a timeout or a
     refusal gives '' so one broken sensor cannot stop the others."""
-    flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)       # no black console window flashing up on the desktop
-    try:
-        done = subprocess.run(args, capture_output=True, timeout=timeout, creationflags=flags)
-    except (OSError, subprocess.SubprocessError):
-        return ""
-    return done.stdout.decode("utf-8", errors="replace")
+    return run_checked(args, timeout)[1]
 
 
 def command_succeeds(args, timeout=30):

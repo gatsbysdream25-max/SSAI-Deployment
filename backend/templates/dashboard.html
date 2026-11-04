@@ -2056,7 +2056,8 @@ function renderLocalAgents(agents) {
 
   const groups = Object.create(null);        // keyed by a hostname a node chose: no inherited keys such as __proto__
   agents.forEach(a => {
-    const host = a.hostname || 'ProDesk';
+    // A Windows agent shares its PC's hostname with the hub's Linux agents; keep its sensors in a group of their own.
+    const host = (a.hostname || 'ProDesk') + (a.platform === 'windows' ? ' (Windows)' : '');
     if (!groups[host]) groups[host] = [];
     groups[host].push(a);
   });
@@ -2084,7 +2085,7 @@ function renderLocalAgents(agents) {
       const found = a.threat_count ?? '—';
       const icon = _AI_ROLES.has(a.role) ? '🤖 ' : a.role === 'ai_scout' ? '🔭 ' : '';
       return `<div class="agent-card role-${esc(a.role || '')}">
-        <div class="agent-name">${icon}${esc(a.name)}</div>
+        <div class="agent-name" title="${esc(a.name)}">${icon}${esc(String(a.name).split('@')[0])}</div>
         <div class="agent-badge badge-${esc(a.status || 'idle')}">${esc(a.status || 'idle')}</div>
         <div class="agent-stats">${esc(String(scans))} scans · ${esc(String(found))} found · ${esc(lastScan)}</div>
         ${agentToggle(a.name)}

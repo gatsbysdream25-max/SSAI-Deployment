@@ -49,3 +49,6 @@ fi
 ( cd "$OUT" && sha256sum "$(basename "$PKG")" > "$(basename "$PKG").sha256" )
 echo "$PKG"
 cat "$PKG.sha256"
+# The one-line installer is attached to every release beside the package (people run it before they have anything else).
+git -C "$REPO" show "$REF:deploy/get-ssai.sh" > "$OUT/get-ssai.sh"
+echo "$OUT/get-ssai.sh"

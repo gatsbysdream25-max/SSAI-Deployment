@@ -11,8 +11,10 @@ import json
 import os
 import re
 import shutil
+import time
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass
+from datetime import datetime, timezone
 
 from . import util
 
@@ -240,18 +242,234 @@ class ProcessSensor(Sensor):
 
 
 # ── Windows protection settings ───────────────────────────────────────────────────────────────────────────────────────
-class SecuritySensor(Sensor):
-    agent_name = "WinSecurityAgent"
-    role = "config_monitor"
-    description = "Checks that Windows Defender and the Windows firewall are switched on and up to date"
-    interval = 600
+# ── Event logs ────────────────────────────────────────────────────────────────────────────────────────────────────────
+@dataclass
+class LogEvent:
+    record_id: int
+    event_id: int
+    provider: str
+    time: object          # when it happened (a UTC datetime), or None if the log gave no readable time
+    data: dict            # the event's named <Data> items
+    fields: list          # every <Data> text in order; some events (the blue-screen one) have unnamed items only
+    pid: int = 0          # the process that wrote the event (0 if the log did not say)
+
+
+def parse_event_time(text):
+    """'2026-11-01T16:31:36.3720000Z' -> a UTC datetime; anything else -> None."""
+    try:
+        return datetime.strptime(text[:19], "%Y-%m-%dT%H:%M:%S").replace(tzinfo=timezone.utc)
+    except (TypeError, ValueError):
+        return None
+
+
+def parse_events(xml_text):
+    """Turn `wevtutil qe ... /f:xml` output (several <Event> elements, no single root) into LogEvent records."""
+    try:
+        root = ET.fromstring("<Events>" + re.sub(r"<\?xml[^>]*\?>", "", xml_text) + "</Events>")
+    except ET.ParseError:
+        return []
+    events = []
+    for event in root.iter(EVENT_NS + "Event"):
+        system = event.find(EVENT_NS + "System")
+        if system is None:
+            continue
+        record, event_id = system.find(EVENT_NS + "EventRecordID"), system.find(EVENT_NS + "EventID")
+        provider, created = system.find(EVENT_NS + "Provider"), system.find(EVENT_NS + "TimeCreated")
+        if record is None or not (record.text or "").isdigit() or event_id is None or not (event_id.text or "").isdigit():
+            continue
+        items = list(event.iter(EVENT_NS + "Data"))
+        execution = system.find(EVENT_NS + "Execution")
+        pid = execution.get("ProcessID", "") if execution is not None else ""
+        events.append(LogEvent(
+            record_id=int(record.text), event_id=int(event_id.text),
+            provider=provider.get("Name", "") if provider is not None else "",
+            time=parse_event_time(created.get("SystemTime", "")) if created is not None else None,
+            data={d.get("Name"): (d.text or "") for d in items if d.get("Name")},
+            fields=[d.text or "" for d in items], pid=int(pid) if pid.isdigit() else 0))
+    return events
+
+
+class EventLogSensor(Sensor):
+    """Shared by the sensors that read Windows event logs: ask wevtutil, keep only what is new since the last look."""
+
+    def new_events(self, log, xpath, fact_name, count=200):
+        """Events in `log` matching `xpath`, newest record numbers only. The very first look only notes where the log
+        ends, so an old log is not reported as if it had just happened."""
+        events = parse_events(self.run(["wevtutil", "qe", log, f"/q:{xpath}", f"/c:{count}", "/rd:true", "/f:xml"]))
+        last_seen = self.state.get(fact_name)
+        self.state.put(fact_name, max([e.record_id for e in events] + [last_seen or 0]))
+        if last_seen is None:
+            return []
+        return [e for e in events if e.record_id > last_seen]
+
+
+def _event_query(provider, *event_ids):
+    ids = " or ".join(f"EventID={i}" for i in event_ids)
+    return f"*[System[Provider[@Name='{provider}'] and ({ids})]]"
+
+
+class EventSensor(EventLogSensor):
+    agent_name = "WinEventAgent"
+    role = "event_monitor"
+    description = ("Watches the Windows event logs for new services, new accounts, changes to the Administrators group, "
+                   "cleared logs and PowerShell scripts Windows itself flags as suspicious")
+    interval = 120
+
+    SERVICE_INSTALLED = ("System", _event_query("Service Control Manager", 7045))
+    SYSTEM_LOG_CLEARED = ("System", _event_query("Microsoft-Windows-Eventlog", 104))
+    SECURITY_LOG_CLEARED = ("Security", _event_query("Microsoft-Windows-Eventlog", 1102))
+    ACCOUNT_CREATED = ("Security", _event_query("Microsoft-Windows-Security-Auditing", 4720))
+    GROUP_MEMBER_ADDED = ("Security", _event_query("Microsoft-Windows-Security-Auditing", 4732))
+    TASK_CREATED = ("Security", _event_query("Microsoft-Windows-Security-Auditing", 4698))
+    SCRIPT_FLAGGED = ("Microsoft-Windows-PowerShell/Operational", "*[System[(EventID=4104) and (Level=3)]]")
+
+    ADMINISTRATORS_SID = "S-1-5-32-544"
+    # A service that starts from a user's folder, a temp folder or a script host is how malware often sets itself up.
+    RISKY_SERVICE_PATH = re.compile(r"\\users\\|\\temp\\|\\appdata\\|powershell|%comspec%|cmd(?:\.exe)?\s|mshta|wscript|cscript", re.I)
+    OWN_PATH = re.compile(r"^\"?(?:[a-z]:\\windows\\|[a-z]:\\program files)", re.I)
+
+    def __init__(self, state, can_read_log=None, **kwargs):
+        super().__init__(state, **kwargs)
+        self.can_read_log = can_read_log or (lambda: util.command_succeeds(["wevtutil", "qe", "Security", "/c:1", "/f:text"]))
+
+    def scan(self):
+        security = self.can_read_log()
+        self.problem = "" if security else \
+            "cannot read the Windows Security log, so account, group and task changes are not seen; run the agent as SYSTEM or Administrator"
+        findings = self._services() + self._cleared_logs(security) + self._scripts()
+        if security:
+            findings += self._accounts() + self._admin_group() + self._tasks()
+        return findings
+
+    def _look(self, query, fact):
+        return self.new_events(query[0], query[1], fact)
+
+    def _services(self):
+        findings = []
+        for event in self._look(self.SERVICE_INSTALLED, "last_service_record"):
+            name, path = event.data.get("ServiceName", "?"), event.data.get("ImagePath", "")
+            risky = bool(self.RISKY_SERVICE_PATH.search(path))
+            severity = "high" if risky else ("low" if self.OWN_PATH.search(path) else "medium")
+            # The path is deliberately not copied into the finding: a service's command line can hold secrets.
+            findings.append(Finding(
+                url=f"service {name}", threat_type="new-service", severity=severity,
+                description=f"A new Windows service was installed: {name}"
+                            + (" (it starts from a user folder, a temp folder or a script program)" if risky else ""),
+                key=f"svc:{event.record_id}"))
+        return findings
+
+    def _cleared_logs(self, security):
+        findings = []
+        for label, query, fact in (("System", self.SYSTEM_LOG_CLEARED, "last_system_clear_record"),
+                                   ("Security", self.SECURITY_LOG_CLEARED, "last_security_clear_record")):
+            if label == "Security" and not security:
+                continue
+            for event in self._look(query, fact):
+                findings.append(Finding(
+                    url=f"{label} event log", threat_type="log-cleared", severity="high",
+                    description=f"The Windows {label} event log was cleared (this is how an intruder hides what they did)",
+                    key=f"clear:{label}:{event.record_id}"))
+        return findings
+
+    def _accounts(self):
+        return [Finding(url=f"account {e.data.get('TargetUserName', '?')}", threat_type="new-account", severity="medium",
+                        description=f"A new local Windows account was created: {e.data.get('TargetUserName', '?')}",
+                        key=f"acct:{e.record_id}")
+                for e in self._look(self.ACCOUNT_CREATED, "last_account_record")]
+
+    def _admin_group(self):
+        findings = []
+        for event in self._look(self.GROUP_MEMBER_ADDED, "last_group_record"):
+            if event.data.get("TargetSid") != self.ADMINISTRATORS_SID:
+                continue
+            findings.append(Finding(
+                url="Administrators group", threat_type="admin-change", severity="high",
+                description=f"An account ({event.data.get('MemberSid', '?')}) was added to the local Administrators group "
+                            f"by {event.data.get('SubjectUserName', '?')}",
+                key=f"admin:{event.record_id}"))
+        return findings
+
+    def _tasks(self):
+        findings = []
+        for event in self._look(self.TASK_CREATED, "last_task_record"):
+            name = event.data.get("TaskName", "?")
+            if name.lower().startswith("\\microsoft\\"):
+                continue                                    # Windows' own tasks are created all the time
+            findings.append(Finding(url=f"task {name}", threat_type="new-scheduled-task", severity="low",
+                                    description=f"A new scheduled task was created: {name}", key=f"task:{event.record_id}"))
+        return findings
+
+    def _scripts(self):
+        flagged = self._look(self.SCRIPT_FLAGGED, "last_script_record")
+        # Windows logs the generated wrapper scripts of its own modules (loaded by Get-NetTCPConnection and the like) at the
+        # same warning level as a suspicious script. Those from PowerShell this agent started are its own questions, not a threat.
+        own = util.own_child_pids()
+        flagged = [e for e in flagged if not (e.pid and e.pid in own)]
+        if not flagged:
+            return []
+        # Only the count: the script text itself can hold passwords and is never copied.
+        return [Finding(url="PowerShell", threat_type="suspicious-script", severity="medium",
+                        description=f"Windows flagged {len(flagged)} PowerShell script(s) as suspicious",
+                        key=f"ps:{max(e.record_id for e in flagged)}")]
+
+
+# ── Windows Defender ──────────────────────────────────────────────────────────────────────────────────────────────────
+class DefenderSensor(Sensor):
+    agent_name = "WinDefenderAgent"
+    role = "malware_monitor"
+    description = ("Reports what Windows Defender finds, whether Defender, its ransomware and attack-surface protections and "
+                   "the firewall are on, and whether its definitions are up to date")
+    interval = 300
     DEFENDER = ("Get-MpComputerStatus | Select-Object AntivirusEnabled,RealTimeProtectionEnabled,AntivirusSignatureAge "
                 "| ConvertTo-Json -Compress")
     FIREWALL = "Get-NetFirewallProfile | Select-Object Name,Enabled | ConvertTo-Json -Compress"
     STALE_SIGNATURE_DAYS = 7
 
+    DETECTIONS = ("$threats = @{}; Get-MpThreat | ForEach-Object { $threats[[string]$_.ThreatID] = $_ }; "
+                  "Get-MpThreatDetection | ForEach-Object { [pscustomobject]@{ Id = [string]$_.DetectionID; "
+                  "Threat = $threats[[string]$_.ThreatID].ThreatName; Severity = $threats[[string]$_.ThreatID].SeverityID; "
+                  "Resource = (@($_.Resources) | Select-Object -First 1) } } | ConvertTo-Json -Compress")
+    POSTURE = ("$s = Get-MpComputerStatus; $p = Get-MpPreference; [pscustomobject]@{ Active = $s.AntivirusEnabled; "
+               "FolderAccess = [int]$p.EnableControlledFolderAccess; AsrRules = @($p.AttackSurfaceReductionRules_Ids).Count } "
+               "| ConvertTo-Json -Compress")
+    SEVERITY = {1: "low", 2: "medium", 4: "high", 5: "high"}      # Defender's own scale: low, moderate, high, severe
+
     def scan(self):
-        return self._defender_problems() + self._firewall_problems()
+        return self._detections() + self._posture() + self._defender_problems() + self._firewall_problems()
+
+    def _detections(self):
+        items = [i for i in powershell_objects(self.powershell(self.DETECTIONS)) if i.get("Id")]
+        known = self.state.get("known_defender_detections")
+        self.state.put("known_defender_detections", sorted({i["Id"] for i in items} | set(known or [])))
+        if known is None:                                  # first look: what Defender already dealt with is history
+            return []
+        findings = []
+        for item in items:
+            if item["Id"] in known:
+                continue
+            # Only the file's name, not its folder: the folder often holds the user's name.
+            filename = re.split(r"[\\/]", item.get("Resource") or "")[-1] or "a file"
+            threat = item.get("Threat") or "malware"
+            findings.append(Finding(
+                url=filename, threat_type="malware-detected", severity=self.SEVERITY.get(item.get("Severity"), "medium"),
+                description=f"Windows Defender detected {threat} in {filename}", key=f"mp:{item['Id']}"))
+        return findings
+
+    def _posture(self):
+        status = (powershell_objects(self.powershell(self.POSTURE)) or [{}])[0]
+        if not status.get("Active"):
+            return []                    # Defender is not the active antivirus here (another product may be): say nothing
+        findings = []
+        if status.get("FolderAccess") == 0:
+            findings.append(Finding(
+                "Controlled folder access", "ransomware-protection-off", "low",
+                "Windows' ransomware protection (controlled folder access) is off; turn it on in Windows Security, "
+                "Virus & threat protection", "cfa-off"))
+        if status.get("AsrRules") == 0:
+            findings.append(Finding(
+                "Attack surface reduction", "protection-off", "low",
+                "No Windows attack surface reduction rules are switched on", "asr-none"))
+        return findings
 
     def _defender_problems(self):
         status = (powershell_objects(self.powershell(self.DEFENDER)) or [{}])[0]
@@ -278,19 +496,112 @@ class SecuritySensor(Sensor):
         return findings
 
 
-class DiskSensor(Sensor):
-    agent_name = "WinDiskAgent"
-    role = "disk_monitor"
-    description = "Warns when the system drive is nearly full"
-    interval = 900
+# ── Crashes and hardware errors ───────────────────────────────────────────────────────────────────────────────────────
+BUGCHECK_NAMES = {
+    0x0A: "IRQL_NOT_LESS_OR_EQUAL", 0x1A: "MEMORY_MANAGEMENT", 0x1E: "KMODE_EXCEPTION_NOT_HANDLED",
+    0x3B: "SYSTEM_SERVICE_EXCEPTION", 0x50: "PAGE_FAULT_IN_NONPAGED_AREA", 0x7E: "SYSTEM_THREAD_EXCEPTION_NOT_HANDLED",
+    0xD1: "DRIVER_IRQL_NOT_LESS_OR_EQUAL", 0xF7: "DRIVER_OVERRAN_STACK_BUFFER", 0x133: "DPC_WATCHDOG_VIOLATION",
+    0x139: "KERNEL_SECURITY_CHECK_FAILURE", 0x124: "WHEA_UNCORRECTABLE_ERROR",
+}
+
+
+class StabilitySensor(EventLogSensor):
+    agent_name = "WinStabilityAgent"
+    role = "stability_monitor"
+    description = ("Reports blue-screen crashes, unexpected shutdowns and hardware errors, warns when they repeat, "
+                   "and warns when the system drive is nearly full")
+    interval = 600
     LOW_PERCENT = 10
     CRITICAL_PERCENT = 5
+    REPEATED_CRASHES = 3                       # this many in a day is a pattern, not bad luck
+    WINDOW_SECONDS = 24 * 3600
 
-    def __init__(self, state, drive=None, **kwargs):
+    BUGCHECK = ("System", _event_query("Microsoft-Windows-WER-SystemErrorReporting", 1001))
+    UNEXPECTED_SHUTDOWN = ("System", _event_query("Microsoft-Windows-Kernel-Power", 41))
+    HARDWARE_ERROR = ("System", "*[System[Provider[@Name='Microsoft-Windows-WHEA-Logger']]]")
+    FATAL_HARDWARE_IDS = (1, 18, 20)           # WHEA: fatal hardware error, fatal machine check, uncorrectable PCI Express error
+
+    def __init__(self, state, clock=time.time, drive=None, **kwargs):
         super().__init__(state, **kwargs)
+        self.clock = clock
         self.drive = drive or (os.environ.get("SystemDrive", "C:") + "\\")
 
     def scan(self):
+        bugchecks = self._recent(self.BUGCHECK, "last_bugcheck_record")
+        power_events = self._recent(self.UNEXPECTED_SHUTDOWN, "last_shutdown_record")
+        return (self._crashes(bugchecks, power_events) + self._shutdowns(power_events) + self._hardware_errors()
+                + self._disk_problems())
+
+    def _recent(self, query, fact):
+        """New events, or on the very first look the last day's worth: a crash just before the agent was installed is
+        exactly what a person wants to hear about, unlike an old login failure."""
+        first_look = self.state.get(fact) is None
+        events = self.new_events(query[0], query[1], fact)
+        if first_look:
+            events = [e for e in parse_events(self.run(
+                ["wevtutil", "qe", query[0], f"/q:{query[1]}", "/c:50", "/rd:true", "/f:xml"]))
+                if e.time and self.clock() - e.time.timestamp() <= self.WINDOW_SECONDS]
+        return events
+
+    @staticmethod
+    def bugcheck_code(event):
+        match = re.search(r"0x([0-9a-f]+)", event.fields[0] if event.fields else "", re.I)
+        return int(match.group(1), 16) if match else None
+
+    @staticmethod
+    def power_event_code(event):
+        """The bug check code Kernel-Power 41 carries (it writes it in decimal); 0 or none means no crash was recorded."""
+        value = event.data.get("BugcheckCode", "")
+        return int(value) if value.isdigit() else 0
+
+    def _same_crash(self, power_event, bugcheck):
+        """Kernel-Power 41 and the bug check event are two records of one crash: same code, a few seconds apart."""
+        if self.power_event_code(power_event) != self.bugcheck_code(bugcheck):
+            return False
+        if power_event.time is None or bugcheck.time is None:
+            return True
+        return abs((power_event.time - bugcheck.time).total_seconds()) < 600
+
+    def _crashes(self, bugchecks, power_events):
+        """Every crash once. Usually the bug check event records it, but when Windows could not write a crash dump that
+        event is missing and only Kernel-Power 41 remembers the crash, so that one counts too."""
+        crashes = []
+        for event in bugchecks:
+            crashes.append((event.record_id, self.bugcheck_code(event), f"crash:{event.record_id}"))
+        for event in power_events:
+            if self.power_event_code(event) and not any(self._same_crash(event, b) for b in bugchecks):
+                crashes.append((event.record_id, self.power_event_code(event), f"crash-power:{event.record_id}"))
+        findings = []
+        for _, code, key in crashes:
+            name = BUGCHECK_NAMES.get(code)
+            label = f"0x{code:X}" + (f" ({name})" if name else "") if code is not None else "an unknown code"
+            findings.append(Finding(url="this PC", threat_type="system-crash", severity="medium",
+                                    description=f"Windows crashed with a blue screen: bug check {label}", key=key))
+        if len(crashes) >= self.REPEATED_CRASHES:
+            findings.append(Finding(
+                url="this PC", threat_type="repeated-crashes", severity="high",
+                description=f"{len(crashes)} blue-screen crashes in the last day: look for a faulty driver, memory or other hardware",
+                key=f"crashes:{len(crashes)}:{max(c[0] for c in crashes)}"))
+        return findings
+
+    def _shutdowns(self, power_events):
+        # Code 0 means power was cut or the PC froze, which leaves no crash record of its own.
+        return [Finding(url="this PC", threat_type="unexpected-shutdown", severity="medium",
+                        description="Windows restarted without shutting down cleanly (power loss, a freeze or a forced reset)",
+                        key=f"shutdown:{e.record_id}")
+                for e in power_events if not self.power_event_code(e)]
+
+    def _hardware_errors(self):
+        events = self._recent(self.HARDWARE_ERROR, "last_hardware_record")
+        if not events:
+            return []
+        fatal = any(e.event_id in self.FATAL_HARDWARE_IDS for e in events)
+        return [Finding(url="this PC", threat_type="hardware-error", severity="high" if fatal else "medium",
+                        description=f"Windows logged {len(events)} hardware error(s) (WHEA)"
+                                    + (", including an uncorrectable one" if fatal else ", all corrected"),
+                        key=f"whea:{max(e.record_id for e in events)}")]
+
+    def _disk_problems(self):
         try:
             usage = shutil.disk_usage(self.drive)
         except OSError:
@@ -304,4 +615,5 @@ class DiskSensor(Sensor):
 
 def all_sensors(state):
     """Every sensor the agent runs."""
-    return [LoginSensor(state), PortSensor(state), ProcessSensor(state), SecuritySensor(state), DiskSensor(state)]
+    return [LoginSensor(state), PortSensor(state), ProcessSensor(state), DefenderSensor(state), EventSensor(state),
+            StabilitySensor(state)]

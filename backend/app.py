@@ -37,6 +37,7 @@ from routes.remediation import remediation_bp
 from routes.autonomy import autonomy_bp
 from routes.copilot import copilot_bp
 from routes.nodes import nodes_bp
+from routes.node_actions import node_actions_bp
 from routes.settings import settings_bp
 from routes.quarantine import quarantine_bp
 from routes.allowlist import allowlist_bp
@@ -230,7 +231,8 @@ app.register_blueprint(autonomy_bp, url_prefix="/api/autonomy")      # permissio
 app.register_blueprint(allowlist_bp)                               # /api/allowlist
 app.register_blueprint(quarantine_bp)                              # /api/quarantine/import
 app.register_blueprint(settings_bp)                                # /api/settings/agents, /api/settings/ai_routing
-app.register_blueprint(nodes_bp)                                   # /api/node/*, /api/nodes/*, /api/signal*
+app.register_blueprint(node_actions_bp)                            # /api/node/actions/*, /api/nodes/<id>/actions*
+app.register_blueprint(nodes_bp)                                 # /api/node/*, /api/nodes/*, /api/signal*
 app.register_blueprint(login_bp)                                   # /login, /logout, /api/admin/password
 app.register_blueprint(copilot_bp, url_prefix="/api/copilot")      # Copilot lane: sanitized brief only
 
@@ -1139,12 +1141,25 @@ def _secure_instance_dir():
             pass
 
 
+def _purge_retired_agents():
+    """Remove dashboard rows of agents that were merged or removed, so the agent count is only agents that exist."""
+    try:
+        from agents.agent_catalog import RETIRED
+        removed = Agent.purge_retired(RETIRED)
+        if removed:
+            logging.getLogger('app').info(f'removed {removed} row(s) of retired agents')
+    except Exception as e:                                             # cosmetic clean-up: never stop the hub from starting
+        db.session.rollback()
+        logging.getLogger('app').warning(f'could not remove retired agent rows: {e}')
+
+
 def _startup_db():
     with _startup_lock():
         db.create_all()
         _ensure_schema()
         _register_hub_node()
         _sync_hub_ai()
+        _purge_retired_agents()
         _secure_instance_dir()
 
 

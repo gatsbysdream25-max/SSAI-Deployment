@@ -132,6 +132,17 @@ class Agent(db.Model):
         """How many agents are active AND have checked in recently (the dashboard's agent count)."""
         return cls.query.filter(cls.status == 'active', cls.last_seen >= cls._fresh_cutoff()).count()
 
+    @classmethod
+    def purge_retired(cls, retired):
+        """Delete the rows of agents that no longer exist. A node's agent is stored as '<name>@<node id>', so the part
+        before '@' is compared. Returns how many rows were removed."""
+        gone = [a for a in cls.query.all() if (a.name or '').split('@', 1)[0] in retired]
+        for a in gone:
+            db.session.delete(a)
+        if gone:
+            db.session.commit()
+        return len(gone)
+
     def shown_status(self):
         """The stored status, except that a silent 'active' agent is reported as 'offline'."""
         seen = self.last_seen
@@ -287,6 +298,38 @@ class AutonomyGrant(db.Model):
                 'ttl_hours': self.ttl_hours, 'rate_limit_per_hour': self.rate_limit_per_hour, 'expires_at': _utc_iso(self.expires_at),
                 'granted_by': self.granted_by, 'granted_at': _utc_iso(self.granted_at),
                 'revoked_at': _utc_iso(self.revoked_at), 'revoked_by': self.revoked_by}
+
+
+# An action a signed-in person approved for ONE enrolled Windows PC. The PC's agent fetches it (it never listens for
+# commands), runs it from a fixed list, and reports back. See node_actions.py.
+class NodeAction(db.Model):
+    __table_args__ = (
+        db.Index('ix_nodeaction_node_status', 'node_id', 'status'),
+    )
+    id          = db.Column(db.Integer, primary_key=True)
+    node_id     = db.Column(db.String(64), nullable=False)
+    action      = db.Column(db.String(32), nullable=False)
+    args        = db.Column(db.Text, default='{}')            # JSON, already validated by node_actions.validate()
+    ttl_hours   = db.Column(db.Float, nullable=True)          # the agent undoes the action this long after it ran
+    reason      = db.Column(db.String(300), nullable=True)
+    threat_id   = db.Column(db.Integer, nullable=True)
+    status      = db.Column(db.String(16), default='queued')  # queued|sent|done|failed|undone|expired
+    created_at  = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
+    created_by  = db.Column(db.String(100), nullable=True)
+    sent_at     = db.Column(db.DateTime, nullable=True)
+    finished_at = db.Column(db.DateTime, nullable=True)
+    result      = db.Column(db.String(500), nullable=True)
+
+    def to_dict(self):
+        import json
+        try:
+            args = json.loads(self.args or '{}')
+        except ValueError:
+            args = {}
+        return {'id': self.id, 'node_id': self.node_id, 'action': self.action, 'args': args, 'ttl_hours': self.ttl_hours,
+                'reason': self.reason, 'threat_id': self.threat_id, 'status': self.status,
+                'created_at': _utc_iso(self.created_at), 'created_by': self.created_by, 'sent_at': _utc_iso(self.sent_at),
+                'finished_at': _utc_iso(self.finished_at), 'result': self.result}
 
 
 # Approve-first remediation queue: a high-confidence multi-AI "malicious" verdict proposes a block instead of applying it, so a

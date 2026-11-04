@@ -11,14 +11,52 @@ in WSL; the Windows agent is a **node** that reports to it.
 | `WinLoginAgent` | The Windows Security log | Bursts of failed passwords (5 or more in one minute from one place) and Remote Desktop sign-ins from internet addresses |
 | `WinPortAgent` | Programs listening for network connections | A new program that starts accepting connections from the network, once it is still there on the next look. Whatever was already listening at install time counts as normal |
 | `WinProcessAgent` | Running programs | Crypto miners and hacking tools by name, and the command tricks malware uses to start: hidden encoded PowerShell, `mshta` or `certutil` fetching from the web, PowerShell downloading and running code (the "paste this into Run" trick) |
-| `WinSecurityAgent` | Windows protection settings | Defender real-time protection switched off, out-of-date virus definitions, a firewall profile switched off |
-| `WinDiskAgent` | The system drive | Less than 10% free space |
+| `WinDefenderAgent` | What Windows Defender finds, and Windows' protection settings | A new detection (threat name and file name only, never the folder), and, when Defender is the active antivirus, real-time protection switched off, out-of-date virus definitions, controlled folder access or attack surface reduction rules switched off (low). Also a firewall profile switched off |
+| `WinEventAgent` | The System, Security and PowerShell event logs | A new service (high if it starts from a user or temp folder), a new local account, someone added to the Administrators group, a cleared event log, a new scheduled task (low; Windows' own are ignored), and PowerShell scripts Windows flags as suspicious (counted, the script text is never copied) |
+| `WinStabilityAgent` | Crash and hardware-error records, and the system drive | Blue-screen crashes with the bug check name, restarts without a clean shutdown, hardware errors (WHEA), and a high finding when 3 or more crashes happen in a day. On its first look it reports the last 24 hours, because a crash just before install matters. Also less than 10% free space on the system drive |
+
+Two notes on the event sensors. Account, group and task changes come from the Security log, which Windows only fills if
+auditing is on: account and group changes are audited by default, scheduled-task creation is not (turn on "Audit Other
+Object Access Events" to see it). And the agent keeps no copy of any log: it remembers only the number of the last record
+it saw, so on the first look it starts from "now" (the stability sensor excepted, as above).
 
 Rules it keeps: findings show private addresses masked (`192.168.xxx.xxx`); a command line is **never** copied into a
 finding (it can hold passwords); the agent sends nothing except findings and "still alive" signals to its own hub.
 
 The AI panel runs on the hub. A Windows PC on its own is at protection level 1 to 2 (Watch / Guard); the hub decides how
 serious a finding is.
+
+## Acting on findings (off by default)
+
+By default the agent only watches. A PC can also carry out actions that **a signed-in person approves on the hub**; there
+is no automatic mode. Turn it on per PC, in an administrator PowerShell on that PC (the hub cannot turn it on):
+
+```powershell
+& "C:\Program Files\SwarmSentinel\ssai-agent.exe" response approve     # off again: ... response off
+```
+
+The agent never listens for commands. Every 30 seconds it asks the hub whether anything was approved for it, so nothing is
+opened on the PC and it works on any network. The hub sends an action name and checked arguments, never a script. The agent
+runs only these:
+
+| Action | What it does | Undone |
+|---|---|---|
+| `block-ip` | Windows Firewall rules `SSAI-block-<id>-in/out` for one public address | after its time limit (default 24 h, at most 7 days) |
+| `defender-scan` / `defender-remove` | Defender quick scan / removal of the threats Defender lists | not needed |
+| `kill-process` | stops one process, by id **and** program name | cannot be undone |
+| `isolate-host` | blocks all traffic except to the hub | after its time limit (default 1 h, at most 24 h) |
+| `block-domain` | `0.0.0.0` lines in the hosts file (a browser with its own encrypted DNS can bypass it) | after its time limit |
+
+Rules the agent enforces itself: every address inside the organisation, the hub, the PC's gateway and DNS servers are never
+blocked (if it cannot list them, nothing is blocked); Windows' own programs, Defender and the agent are never stopped, nor
+anything running from the Windows folder; isolation needs the hub's address as an IP number or `localhost`, and refuses
+if it cannot read the firewall settings it would have to put back; an action runs at most once and not at all after
+an hour of waiting; every network change is undone by the agent from a list kept in `response.json`, so it is lifted even
+if the hub is gone or the agent restarts (and still when the mode is switched to `off`). `ssai-agent.exe response` lists
+what is waiting to be undone. Each action is recorded in `agent.log` and in the hub's audit file.
+
+Hub side: `POST /api/nodes/<node>/actions` (a signed-in person, not an API key), `GET /api/nodes/<node>/actions`,
+`POST /api/nodes/<node>/actions/<id>/undo`. There is no dashboard button for these yet.
 
 ## Install (about two minutes)
 

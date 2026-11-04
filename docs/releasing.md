@@ -19,6 +19,7 @@ not the private one: a private repository cannot serve downloads to anyone else.
 4. Attach these files (drag them into the release page):
    - `swarmsentinel-<version>.tar.gz`, the package
    - `swarmsentinel-<version>.tar.gz.sha256`, so people can check it arrived intact
+   - `get-ssai.sh`, the one-line Linux installer (`make-release.sh` writes it beside the package; people run it with `curl ... | sudo bash`, so it must be on **every** release)
    - `install-windows.ps1`, the one-command installer for Windows (also inside the package, but Windows users need it first)
    - For the native Windows agent (see `docs/windows-agent.md`): `ssai-agent.exe`, `ssai-agent.exe.sha256` and `install-windows-agent.ps1`. Build the exe on Windows with `python windows_agent/build_exe.py --out C:\ssai-dist`. The installer downloads these from the **latest** release, so attach them to every release (or the agent install breaks for the next customer).
 5. Publish the release.

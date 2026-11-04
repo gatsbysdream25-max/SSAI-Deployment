@@ -2,6 +2,7 @@
 """The Windows agent (windows_agent/): its sensors read canned Windows output, its hub client is tried against the REAL hub
 code (a Flask test client), so the agent and the hub cannot drift apart without a test failing.
 Run:  swarmsentinel-env/bin/python3 backend/tools/test_windows_agent.py"""
+import datetime
 import os
 import sys
 import tempfile
@@ -214,7 +215,8 @@ class Processes(unittest.TestCase):
 class Security(unittest.TestCase):
     def scan(self, defender, firewall):
         ps = powershell_answering(**{'Get-MpComputerStatus': defender, 'Get-NetFirewallProfile': firewall})
-        return sensors.SecuritySensor(new_state(), powershell=ps).scan()
+        s = sensors.DefenderSensor(new_state(), powershell=ps)
+        return s._defender_problems() + s._firewall_problems()
 
     def test_defender_real_time_off_is_high(self):
         found = self.scan('{"AntivirusEnabled":true,"RealTimeProtectionEnabled":false,"AntivirusSignatureAge":0}', '[]')
@@ -243,12 +245,261 @@ class Disk(unittest.TestCase):
 
     def scan(self, free_percent):
         with mock.patch.object(sensors.shutil, 'disk_usage', return_value=self.Usage(100, 100 - free_percent, free_percent)):
-            return sensors.DiskSensor(new_state(), drive='C:\\').scan()
+            return sensors.StabilitySensor(new_state(), drive='C:\\')._disk_problems()
 
     def test_levels(self):
         self.assertEqual(self.scan(50), [])
         self.assertEqual(self.scan(8)[0].severity, 'medium')
         self.assertEqual(self.scan(3)[0].severity, 'high')
+
+
+def log_event(record_id, event_id, provider='P', time='2026-11-01T16:31:36.3720000Z', named=None, plain=(), pid=None):
+    """One event, shaped like `wevtutil qe <log> /f:xml` prints it: named <Data> items and/or unnamed ones."""
+    data = ''.join(f'<Data Name="{k}">{v}</Data>' for k, v in (named or {}).items()) + ''.join(f'<Data>{v}</Data>' for v in plain)
+    execution = f'<Execution ProcessID="{pid}" ThreadID="1"/>' if pid is not None else ''
+    return (f'<Event {NS}><System><Provider Name="{provider}"/><EventID>{event_id}</EventID>'
+            f'<TimeCreated SystemTime="{time}"/><EventRecordID>{record_id}</EventRecordID>{execution}</System>'
+            f'<EventData>{data}</EventData></Event>')
+
+
+def wevtutil_answering(**by_query):
+    """A fake wevtutil. A key is the log name, optionally followed by '__' and either an event id ('Security__4720') or a
+    provider name; each time a matching query is asked, the next answer in the list is given ('' when they run out)."""
+    queues = {key: list(answers) for key, answers in by_query.items()}
+
+    def fake(args, timeout=30):
+        text = ' '.join(args)
+        for key, queue in queues.items():
+            log, _, selector = key.partition('__')
+            if f' {log} ' not in f' {text} ':
+                continue
+            if selector and not ((f'EventID={selector})' in text) if selector.isdigit() else (selector in text)):
+                continue
+            return queue.pop(0) if queue else ''
+        return ''
+    return fake
+
+
+class ParseEvents(unittest.TestCase):
+    def test_named_and_unnamed_items_and_the_time_are_read(self):
+        events = sensors.parse_events(log_event(7, 41, 'Prov', named={'BugcheckCode': '0'}, plain=('0x0000001e (0x1)',)))
+        self.assertEqual((events[0].record_id, events[0].event_id, events[0].provider), (7, 41, 'Prov'))
+        self.assertEqual(events[0].data, {'BugcheckCode': '0'})
+        self.assertEqual(events[0].fields, ['0', '0x0000001e (0x1)'])
+        self.assertEqual(events[0].time.year, 2026)
+
+    def test_garbage_and_empty_output_give_no_events(self):
+        self.assertEqual(sensors.parse_events('not xml at all <<<'), [])
+        self.assertEqual(sensors.parse_events(''), [])
+
+
+class Events(unittest.TestCase):
+    def sensor(self, **answers):
+        return sensors.EventSensor(new_state(), run=wevtutil_answering(**answers), can_read_log=lambda: True)
+
+    def test_the_first_look_only_notes_where_the_logs_end(self):
+        s = self.sensor(System__7045=[log_event(1, 7045, named={'ServiceName': 'old', 'ImagePath': 'C:\\Windows\\x.exe'}), ''])
+        self.assertEqual(s.scan(), [])
+
+    def test_a_new_service_from_a_user_folder_is_high_and_its_path_is_not_copied(self):
+        path = 'C:\\Users\\bob\\AppData\\Local\\Temp\\evil.exe --password hunter2'
+        s = self.sensor(System__7045=[log_event(1, 7045), log_event(1, 7045) + log_event(2, 7045, named={'ServiceName': 'Updater', 'ImagePath': path})])
+        s.scan()
+        found = s.scan()
+        self.assertEqual([(f.threat_type, f.severity) for f in found], [('new-service', 'high')])
+        self.assertNotIn('hunter2', found[0].description)
+        self.assertNotIn('AppData', found[0].description)
+
+    def test_a_service_in_program_files_is_low_and_one_elsewhere_is_medium(self):
+        def severity(path):
+            s = self.sensor(System__7045=[log_event(1, 7045), log_event(1, 7045) + log_event(2, 7045, named={'ServiceName': 'S', 'ImagePath': path})])
+            s.scan()
+            return s.scan()[0].severity
+        self.assertEqual(severity('"C:\\Program Files\\Vendor\\svc.exe"'), 'low')
+        self.assertEqual(severity('D:\\tools\\svc.exe'), 'medium')
+
+    def test_a_cleared_security_log_is_high(self):
+        s = self.sensor(Security__1102=[log_event(5, 1102), log_event(5, 1102) + log_event(6, 1102)])
+        s.scan()
+        found = s.scan()
+        self.assertEqual([(f.threat_type, f.severity) for f in found], [('log-cleared', 'high')])
+        self.assertIn('Security', found[0].description)
+
+    def test_adding_someone_to_administrators_is_high_but_other_groups_are_ignored(self):
+        admin = log_event(9, 4732, named={'TargetSid': 'S-1-5-32-544', 'MemberSid': 'S-1-5-21-1-2-3-1001', 'SubjectUserName': 'bob'})
+        users = log_event(10, 4732, named={'TargetSid': 'S-1-5-32-545', 'MemberSid': 'S-1-5-21-1-2-3-1002', 'SubjectUserName': 'bob'})
+        s = self.sensor(Security__4732=[log_event(1, 4732), log_event(1, 4732) + admin + users])
+        s.scan()
+        found = s.scan()
+        self.assertEqual([(f.threat_type, f.severity) for f in found], [('admin-change', 'high')])
+
+    def test_a_new_account_is_medium(self):
+        s = self.sensor(Security__4720=[log_event(1, 4720), log_event(1, 4720) + log_event(2, 4720, named={'TargetUserName': 'helpdesk2'})])
+        s.scan()
+        found = s.scan()
+        self.assertEqual([(f.threat_type, f.severity) for f in found], [('new-account', 'medium')])
+        self.assertIn('helpdesk2', found[0].description)
+
+    def test_windows_own_scheduled_tasks_are_ignored_others_are_low(self):
+        own = log_event(2, 4698, named={'TaskName': '\\Microsoft\\Windows\\Defrag\\ScheduledDefrag'})
+        mine = log_event(3, 4698, named={'TaskName': '\\Backup nightly'})
+        s = self.sensor(Security__4698=[log_event(1, 4698), log_event(1, 4698) + own + mine])
+        s.scan()
+        found = s.scan()
+        self.assertEqual([(f.threat_type, f.severity) for f in found], [('new-scheduled-task', 'low')])
+
+    def test_flagged_powershell_is_counted_and_the_script_is_never_copied(self):
+        flagged = ''.join(log_event(i, 4104, named={'ScriptBlockText': 'secret-token-123'}) for i in (2, 3, 4))
+        s = self.sensor(**{'Microsoft-Windows-PowerShell/Operational': [log_event(1, 4104), log_event(1, 4104) + flagged]})
+        s.scan()
+        found = s.scan()
+        self.assertEqual(len(found), 1)
+        self.assertIn('3 PowerShell', found[0].description)
+        self.assertNotIn('secret-token', found[0].description)
+
+    def test_flagged_powershell_the_agent_started_itself_is_not_a_finding(self):
+        """Windows logs its own generated module wrappers (loaded by the agent's Get-NetTCPConnection) as warnings."""
+        util.note_child(4242)
+        ours = ''.join(log_event(i, 4104, named={'ScriptBlockText': 'wrapper'}, pid=4242) for i in (2, 3, 4))
+        s = self.sensor(**{'Microsoft-Windows-PowerShell/Operational': [log_event(1, 4104), log_event(1, 4104) + ours]})
+        s.scan()
+        self.assertEqual(s.scan(), [])
+
+    def test_flagged_powershell_from_another_process_still_counts_when_mixed_with_the_agents_own(self):
+        util.note_child(4243)
+        mixed = (''.join(log_event(i, 4104, named={'ScriptBlockText': 'wrapper'}, pid=4243) for i in (2, 3))
+                 + log_event(4, 4104, named={'ScriptBlockText': 'evil'}, pid=777)
+                 + log_event(5, 4104, named={'ScriptBlockText': 'no pid logged'}))
+        s = self.sensor(**{'Microsoft-Windows-PowerShell/Operational': [log_event(1, 4104), log_event(1, 4104) + mixed]})
+        s.scan()
+        found = s.scan()
+        self.assertEqual(len(found), 1)
+        self.assertIn('2 PowerShell', found[0].description)
+
+    def test_the_agents_children_are_remembered_by_run_command_and_forgotten_after_a_while(self):
+        import sys
+        util.run_command([sys.executable, '-c', 'pass'])
+        self.assertTrue(util.own_child_pids())
+        with mock.patch.object(util.time, 'monotonic', return_value=util.time.monotonic() + 31 * 60):
+            self.assertEqual(util.own_child_pids(), set())
+
+    def test_without_access_to_the_security_log_it_says_so_and_still_watches_the_rest(self):
+        s = sensors.EventSensor(new_state(), run=wevtutil_answering(), can_read_log=lambda: False)
+        self.assertEqual(s.scan(), [])
+        self.assertIn('cannot read the Windows Security log', s.problem)
+
+
+class Defender(unittest.TestCase):
+    def sensor(self, detections=(), posture=''):
+        queue = list(detections)
+        ps = powershell_answering(**{'Get-MpThreatDetection': None, 'EnableControlledFolderAccess': posture})
+
+        def fake(script, timeout=45):
+            if 'Get-MpThreatDetection' in script:
+                return queue.pop(0) if queue else ''
+            return ps(script, timeout)
+        return sensors.DefenderSensor(new_state(), powershell=fake)
+
+    OLD = '{"Id":"1","Threat":"Old.Thing","Severity":2,"Resource":"file:_C:\\\\Users\\\\bob\\\\old.exe"}'
+    NEW = '{"Id":"2","Threat":"Trojan:Win32/Bad","Severity":5,"Resource":"file:_C:\\\\Users\\\\bob\\\\Downloads\\\\setup.exe"}'
+
+    def test_what_defender_already_found_before_the_first_look_is_history(self):
+        s = self.sensor(detections=[self.OLD, self.OLD])
+        self.assertEqual(s.scan(), [])
+        self.assertEqual(s.scan(), [])
+
+    def test_a_new_detection_is_reported_with_the_file_name_only(self):
+        s = self.sensor(detections=[self.OLD, '[' + self.OLD + ',' + self.NEW + ']'])
+        s.scan()
+        found = s.scan()
+        self.assertEqual([(f.threat_type, f.severity, f.url) for f in found], [('malware-detected', 'high', 'setup.exe')])
+        self.assertIn('Trojan:Win32/Bad', found[0].description)
+        self.assertNotIn('bob', found[0].description)
+
+    def test_ransomware_and_asr_protections_off_are_low(self):
+        s = self.sensor(posture='{"Active":true,"FolderAccess":0,"AsrRules":0}')
+        found = s.scan()
+        self.assertEqual(sorted((f.threat_type, f.severity) for f in found),
+                         [('protection-off', 'low'), ('ransomware-protection-off', 'low')])
+
+    def test_protections_on_or_another_antivirus_in_charge_report_nothing(self):
+        self.assertEqual(self.sensor(posture='{"Active":true,"FolderAccess":1,"AsrRules":4}').scan(), [])
+        self.assertEqual(self.sensor(posture='{"Active":false,"FolderAccess":0,"AsrRules":0}').scan(), [])
+        self.assertEqual(self.sensor(posture='').scan(), [])
+
+
+class Stability(unittest.TestCase):
+    NOW = datetime.datetime(2026, 11, 1, 17, 0, 0, tzinfo=datetime.timezone.utc).timestamp()
+
+    def sensor(self, **answers):
+        return sensors.StabilitySensor(new_state(), run=wevtutil_answering(**answers), clock=lambda: self.NOW)
+
+    @staticmethod
+    def crash(record_id, code='0x0000001e', time='2026-11-01T16:31:36.0000000Z'):
+        return log_event(record_id, 1001, 'Microsoft-Windows-WER-SystemErrorReporting', time=time,
+                         plain=(f'{code} (0xffffffffc0000005, 0x1, 0x0, 0x8)', 'C:\\WINDOWS\\Minidump\\x.dmp'))
+
+    def test_a_crash_in_the_last_day_is_reported_on_the_first_look_with_its_name(self):
+        s = self.sensor(System__1001=[self.crash(1), self.crash(1)])
+        found = s.scan()
+        self.assertEqual([(f.threat_type, f.severity) for f in found], [('system-crash', 'medium')])
+        self.assertIn('KMODE_EXCEPTION_NOT_HANDLED', found[0].description)
+
+    def test_an_old_crash_is_not_reported_on_the_first_look(self):
+        old = self.crash(1, time='2026-10-20T10:00:00.0000000Z')
+        self.assertEqual(self.sensor(System__1001=[old, old]).scan(), [])
+
+    def test_three_crashes_in_a_day_add_a_high_repeated_crash_finding(self):
+        three = self.crash(1) + self.crash(2, '0x0000000a') + self.crash(3, '0x0000001a')
+        found = self.sensor(System__1001=[three, three]).scan()
+        self.assertEqual(sorted((f.threat_type, f.severity) for f in found),
+                         [('repeated-crashes', 'high'), ('system-crash', 'medium'), ('system-crash', 'medium'), ('system-crash', 'medium')])
+
+    def test_later_looks_report_only_new_crashes(self):
+        s = self.sensor(System__1001=[self.crash(1), self.crash(1), self.crash(1) + self.crash(2)])
+        s.scan()
+        found = s.scan()
+        self.assertEqual([f.key for f in found], ['crash:2'])
+
+    @staticmethod
+    def power(record_id, code, time='2026-11-01T16:31:23.0000000Z'):
+        return log_event(record_id, 41, 'Microsoft-Windows-Kernel-Power', time=time, named={'BugcheckCode': code})
+
+    def test_a_power_loss_is_reported_as_an_unexpected_shutdown_not_a_crash(self):
+        found = self.sensor(System__41=[self.power(4, '0'), self.power(4, '0')]).scan()
+        self.assertEqual([f.threat_type for f in found], ['unexpected-shutdown'])
+        self.assertEqual(found[0].key, 'shutdown:4')
+
+    def test_a_crash_recorded_by_both_events_is_counted_once(self):
+        # 0x1E is 30 in decimal, which is how Kernel-Power 41 writes it; 13 seconds apart is one crash
+        found = self.sensor(System__1001=[self.crash(1), self.crash(1)], System__41=[self.power(5, '30'), self.power(5, '30')]).scan()
+        self.assertEqual([f.threat_type for f in found], ['system-crash'])
+
+    def test_a_crash_only_kernel_power_remembers_is_still_reported(self):
+        # when Windows cannot write a dump (as happened on this PC) the bug check event is missing entirely
+        found = self.sensor(System__41=[self.power(7, '59'), self.power(7, '59')]).scan()
+        self.assertEqual([(f.threat_type, f.key) for f in found], [('system-crash', 'crash-power:7')])
+        self.assertIn('SYSTEM_SERVICE_EXCEPTION', found[0].description)
+
+    def test_a_fatal_hardware_error_is_high_and_corrected_ones_are_medium(self):
+        corrected = log_event(7, 19, 'Microsoft-Windows-WHEA-Logger')
+        fatal = log_event(8, 18, 'Microsoft-Windows-WHEA-Logger')
+        whea = 'System__Microsoft-Windows-WHEA-Logger'
+        self.assertEqual(self.sensor(**{whea: [corrected, corrected]}).scan()[0].severity, 'medium')
+        found = self.sensor(**{whea: [corrected + fatal, corrected + fatal]}).scan()
+        self.assertEqual((found[0].threat_type, found[0].severity), ('hardware-error', 'high'))
+
+    def test_an_unreadable_log_reports_nothing(self):
+        self.assertEqual(self.sensor().scan(), [])
+
+
+class EverySensorIsRegistered(unittest.TestCase):
+    def test_the_agent_runs_all_six_with_distinct_names(self):
+        names = [s.agent_name for s in sensors.all_sensors(new_state())]
+        self.assertEqual(len(names), 6)
+        self.assertEqual(len(set(names)), 6)
+        self.assertTrue({'WinDefenderAgent', 'WinEventAgent', 'WinStabilityAgent'} <= set(names))
+        self.assertFalse({'WinSecurityAgent', 'WinDiskAgent'} & set(names))   # folded into Defender and Stability
 
 
 class HubClientAgainstTheRealHub(unittest.TestCase):

@@ -13,7 +13,7 @@ import signal
 import sys
 import threading
 
-from . import __version__, agent, config, hub, sensors, state as state_module
+from . import __version__, agent, config, hub, response, sensors, state as state_module
 
 
 def build_parser():
@@ -27,6 +27,10 @@ def build_parser():
     commands.add_parser("scan", help="look once and print the findings, sending nothing")
     commands.add_parser("status", help="show the settings and test the hub connection")
     commands.add_parser("version", help="print the agent's version")
+    respond = commands.add_parser("response", help="show or set whether this PC carries out actions a person approves on the hub")
+    respond.add_argument("mode", nargs="?", choices=config.RESPONSE_MODES, help="off (default): never asks; approve: runs approved actions")
+    respond.add_argument("--lift-all", action="store_true",
+                         help="undo every block and isolation still waiting on a timer, now (the installer does this before removing the agent)")
     return parser
 
 
@@ -67,7 +71,8 @@ def command_run(_args):
         return 1
     start_logging(to_file=True)
     state = state_module.State()
-    runner = agent.AgentRunner(hub.HubClient(settings), state, sensors.all_sensors(state))
+    client = hub.HubClient(settings)
+    runner = agent.AgentRunner(client, state, sensors.all_sensors(state), responder=response.Responder(client, settings))
     stop = threading.Event()
     for name in ("SIGINT", "SIGTERM", "SIGBREAK"):
         if hasattr(signal, name):
@@ -106,8 +111,32 @@ def command_status(_args):
     return 0 if code == 200 else 1
 
 
+def command_response(args):
+    settings = config.load_settings()
+    if settings is None:
+        print("This PC is not enrolled yet.", file=sys.stderr)
+        return 1
+    if args.mode:
+        try:
+            config.save_response_mode(args.mode)
+        except OSError as error:
+            print(f"Could not save the setting ({error}). Run in an administrator PowerShell.", file=sys.stderr)
+            return 1
+        print(f"Response mode is now '{args.mode}'. The running agent picks it up within a minute.")
+    responder = response.Responder(None, settings)
+    if args.lift_all:
+        lifted, failed = responder.lift_everything()
+        print(f"Undid {lifted} change(s)." + (f" {failed} could not be undone; see agent.log." if failed else ""))
+        if failed:
+            return 1
+    for line in responder.describe():
+        print(line)
+    return 0
+
+
 def main(argv=None):
     args = build_parser().parse_args(argv)
     handlers = {"enroll": command_enroll, "run": command_run, "scan": command_scan, "status": command_status,
+                "response": command_response,
                 "version": lambda _a: print(f"ssai-agent {__version__}") or 0}
     return handlers[args.command](args)

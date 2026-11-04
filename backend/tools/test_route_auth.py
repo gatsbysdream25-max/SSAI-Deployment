@@ -41,11 +41,14 @@ READER = {
 LOGIN_PAGES = {('GET', '/settings'), ('GET', '/setup')}
 # A machine may call these: the admin key or an enrolled node's own token.
 MACHINE = {('POST', '/api/threats/'), ('POST', '/api/agents/register'), ('POST', '/api/agents/heartbeat'),
-           ('POST', '/api/node/heartbeat'), ('POST', '/api/signal')}
+           ('POST', '/api/node/heartbeat'), ('POST', '/api/signal'),
+           ('POST', '/api/node/actions/poll'), ('POST', '/api/node/actions/<int:id>/result')}
 # Only a node token (never the admin key, never anonymous) makes sense here: the node id comes from the token.
-NODE_ONLY = {('POST', '/api/signal'), ('POST', '/api/node/heartbeat')}
+NODE_ONLY = {('POST', '/api/signal'), ('POST', '/api/node/heartbeat'),
+             ('POST', '/api/node/actions/poll'), ('POST', '/api/node/actions/<int:id>/result')}
 # Deciding for others needs a signed-in PERSON: an API key is refused with 403 (the agents hold the same key).
-PERSON_ONLY = {('POST', '/api/remediation/<int:id>/approve'), ('POST', '/api/autonomy/grants'), ('POST', '/api/threats/<int:threat_id>/block')}
+PERSON_ONLY = {('POST', '/api/remediation/<int:id>/approve'), ('POST', '/api/autonomy/grants'), ('POST', '/api/threats/<int:threat_id>/block'),
+               ('POST', '/api/nodes/<node_id>/actions'), ('POST', '/api/nodes/<node_id>/actions/<int:id>/undo')}
 # Teams approvals: the Copilot lane key AND an approver's own Entra token. Neither key alone (not even the admin key)
 # is enough; see test_copilot_remediation.py for the token checks.
 TEAMS_APPROVER = {('POST', '/api/copilot/remediation/<int:id>/approve'), ('POST', '/api/copilot/remediation/<int:id>/reject')}

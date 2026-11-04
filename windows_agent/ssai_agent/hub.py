@@ -88,6 +88,18 @@ class HubClient:
                                          "last_scan": last_scan, "version": __version__})
         return status
 
+    def fetch_actions(self):
+        """Ask the hub for actions a person approved for this PC. Returns a list (empty when none or the hub is unreachable)."""
+        status, reply = self._send("/node/actions/poll", {})
+        actions = reply.get("actions") if status == 200 else None
+        return actions if isinstance(actions, list) else []
+
+    def report_action(self, action_id, ok, detail, undone=False):
+        """Tell the hub how an action went. True when the hub took the report."""
+        status, _ = self._send(f"/node/actions/{int(action_id)}/result",
+                               {"ok": bool(ok), "detail": str(detail)[:400], "undone": bool(undone)})
+        return status == 200
+
     def send_finding(self, finding, detected_by):
         """Send one finding with private addresses masked. The real address goes in an admin-only field, as on Linux.
         If the hub does not answer the finding is kept and retried before the next one."""

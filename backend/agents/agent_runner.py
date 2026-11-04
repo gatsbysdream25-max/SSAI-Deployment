@@ -812,57 +812,6 @@ class PiHoleAgent(BaseAgent):
             _warn_api(f'pihole {self.PIHOLE}', e)
 
 
-# ── 5. Port Monitor Agent ─────────────────────────────────────────────────────
-class PortMonitorAgent(BaseAgent):
-    name_id = 'PortMonitorAgent'
-    role = 'port_monitor'
-    description = 'Monitors local listening ports for unexpected services'
-    interval = 120
-
-    ALLOWED = ALLOWED_PORTS
-
-    def setup(self):
-        self._known = _BoundedSet(10000)
-        self._pending = set()
-
-    def scan(self):
-        """List listening TCP ports with `ss` and report one that is not in the allowed list only after it is still
-        there on the next scan (this filters out short-lived ports)."""
-        try:
-            r = subprocess.run(['ss', '-tlnp'], capture_output=True, text=True, timeout=10)
-            current = set()
-            for line in r.stdout.splitlines()[1:]:
-# in `ss` output the local address looks like 0.0.0.0:22 followed by a space; capture the port number
-                m = re.search(r':(\d+)\s', line)
-                if m:
-                    current.add(int(m.group(1)))
-
-            candidates = {p for p in current if p not in self.ALLOWED and p not in self._known}
-
-            # FIX (2026-09-09): most "new" ports here are ephemeral one-shot binds
-            # (a dev server or debug socket grabbing a random free port for a few
-            # seconds) rather than persistent services — each pick is a different
-            # random port, so the old immediate-flag logic never got to dedup and
-            # flooded the threat table with thousands of one-off rows for ports
-            # that were already gone by the next scan. Require a port to still be
-            # listening on the *next* scan (interval seconds later) before it's
-            # reported — a genuinely persistent unexpected listener survives that;
-            # a transient ephemeral bind doesn't.
-            confirmed = candidates & self._pending
-            for port in confirmed:
-                self._known.add(port)
-                self._submit(
-                    url=f'localhost:{port}',
-                    threat_type='unexpected-listener',
-                    severity='medium',
-                    description=f'New unexpected listening port detected: {port}',
-                    detected_by=self.name_id,
-                )
-            self._pending = candidates - confirmed
-        except Exception as e:
-            self.log.error(f'Port scan error: {e}')
-
-
 # ── 6. Process Monitor Agent ──────────────────────────────────────────────────
 class ProcessMonitorAgent(BaseAgent):
     name_id = 'ProcessMonitorAgent'
@@ -930,19 +879,34 @@ class ProcessMonitorAgent(BaseAgent):
             self.log.error(f'Process monitor error: {e}')
 
 
-# ── 7. Network Connection Agent ───────────────────────────────────────────────
-class NetworkConnAgent(BaseAgent):
-    name_id = 'NetworkConnAgent'
-    role = 'connection_monitor'
-    description = 'Monitors active outbound connections for C2 beaconing and data exfiltration'
+# ── 7. Socket Watch Agent (listening ports + outbound connections) ────────────
+class SocketWatchAgent(BaseAgent):
+    """One look at this host's sockets per cycle: new unexpected listening ports, and established outbound
+    connections (threat-feed matches and ports malware phones home on). It replaces the separate port and
+    connection monitors, which both ran `ss` on their own timers."""
+    name_id = 'SocketWatchAgent'
+    role = 'socket_monitor'
+    description = 'Monitors listening ports and outbound connections for unexpected services, C2 beaconing and threat-feed matches'
     interval = 60
+    LISTENER_EVERY = 2   # listeners are checked every 2nd cycle (120 s), connections every cycle (60 s)
 
+    ALLOWED = ALLOWED_PORTS
     SUSPICIOUS_PORTS = {4444, 4445, 31337, 6667, 6697, 1337, 8888, 9999}
     INTEL_COOLDOWN = 6 * 3600   # one report per listed endpoint per 6 h, however long the connection lasts
 
     def setup(self):
+        self._known = _BoundedSet(10000)
+        self._pending = set()
         self._seen = _BoundedSet(10000)
         self._intel_seen = _BoundedDict(10000)
+        self._cycle = 0
+
+    def scan(self):
+        """Check connections every cycle and listening ports every LISTENER_EVERY-th cycle."""
+        self._scan_connections()
+        if self._cycle % self.LISTENER_EVERY == 0:
+            self._scan_listeners()
+        self._cycle += 1
 
     def _report_intel(self, hit, line):
         """Report that a live outbound connection matches a threat-feed entry, at most once per INTEL_COOLDOWN per
@@ -961,7 +925,7 @@ class NetworkConnAgent(BaseAgent):
             detected_by=self.name_id,
         )
 
-    def scan(self):
+    def _scan_connections(self):
         """Look at established outbound connections to public addresses: check each against the threat feeds and flag
         connections to ports often used by malware to phone home."""
         try:
@@ -998,161 +962,130 @@ class NetworkConnAgent(BaseAgent):
         except Exception as e:
             self.log.error(f'Connection monitor error: {e}')
 
+    def _scan_listeners(self):
+        """List listening TCP ports with `ss` and report one that is not in the allowed list only after it is still
+        there on the next scan (this filters out short-lived ports)."""
+        try:
+            r = subprocess.run(['ss', '-tlnp'], capture_output=True, text=True, timeout=10)
+            current = set()
+            for line in r.stdout.splitlines()[1:]:
+# in `ss` output the local address looks like 0.0.0.0:22 followed by a space; capture the port number
+                m = re.search(r':(\d+)\s', line)
+                if m:
+                    current.add(int(m.group(1)))
 
-# ── 8. Ollama AI Analyzer Agent ───────────────────────────────────────────────
-class OllamaAnalyzerAgent(BaseAgent):
-    name_id = 'OllamaAnalyzerAgent'
+            candidates = {p for p in current if p not in self.ALLOWED and p not in self._known}
+
+            # FIX (2026-09-09): most "new" ports here are ephemeral one-shot binds
+            # (a dev server or debug socket grabbing a random free port for a few
+            # seconds) rather than persistent services — each pick is a different
+            # random port, so the old immediate-flag logic never got to dedup and
+            # flooded the threat table with thousands of one-off rows for ports
+            # that were already gone by the next scan. Require a port to still be
+            # listening on the *next* scan (interval seconds later) before it's
+            # reported — a genuinely persistent unexpected listener survives that;
+            # a transient ephemeral bind doesn't.
+            confirmed = candidates & self._pending
+            for port in confirmed:
+                self._known.add(port)
+                self._submit(
+                    url=f'localhost:{port}',
+                    threat_type='unexpected-listener',
+                    severity='medium',
+                    description=f'New unexpected listening port detected: {port}',
+                    detected_by=self.name_id,
+                )
+            self._pending = candidates - confirmed
+        except Exception as e:
+            self.log.error(f'Port scan error: {e}')
+
+
+# ── 8. Local AI Analyzer Agent (Ollama; high / medium / low severity tiers) ───
+def _prompt_high(t):
+    return ('You are a cybersecurity analyst. In 2 sentences, assess this threat and recommend action: '
+            f"Type={t.get('type')} Severity={t.get('severity')} "
+            f"Source={t.get('url')} Description={t.get('description','')[:200]}")
+
+
+def _prompt_medium(t):
+    return ('You are a cybersecurity analyst specializing in threat intelligence. '
+            'For the following medium-severity threat, extract any IOCs (IPs, domains, hashes) '
+            'and provide one concrete remediation step: '
+            f"Type={t.get('type')} Source={t.get('url')} "
+            f"Description={t.get('description','')[:200]}")
+
+
+def _prompt_low(t):
+    return ('You are a cybersecurity analyst. In 1-2 sentences, triage this low-severity '
+            'threat and note whether it warrants escalation: '
+            f"Type={t.get('type')} Source={t.get('url')} "
+            f"Description={t.get('description','')[:200]}")
+
+
+class LocalAnalyzerAgent(BaseAgent):
+    """Asks a local Ollama model for a short assessment of threats that have no AI analysis yet. One agent serves three
+    severity tiers, each with its own model and host (the three it replaces were separate threads with the same loop).
+    A threat is only marked done once its verdict is saved, so failures are retried the next time its tier is due."""
+    name_id = 'LocalAnalyzerAgent'
     role = 'ai_analyzer'
-    # FIX: description updated to reflect configurable model via OLLAMA_MODEL env var
-    description = f'AI threat analysis via Ollama {OLLAMA_MODEL} — enriches and scores collected threats'
-    interval = 300  # 5 min
+    description = (f'AI threat analysis via Ollama: {OLLAMA_MODEL} (high severity), {HERMES_MODEL} (medium), '
+                   f'{WATCHTOWER_MODEL} (low)')
+    interval = 300  # 5 min; a tier with a longer `every` is skipped on the cycles in between
+
+    # timeout: the high tier answers from a GPU-backed endpoint in well under 60 s; local CPU-only models measured at
+    # ~48 s for an IOC-extraction answer, so 60 s left no margin and most calls timed out and restarted every cycle.
+    # every: the low tier runs every 15 min (was 5) to ease the heat on the slower machine that hosts it.
+    TIERS = (
+        {'label': 'Ollama', 'query': 'severity=high%2B', 'host': OLLAMA, 'model': OLLAMA_MODEL,
+         'timeout': 60, 'every': 300, 'prompt': _prompt_high},
+        {'label': 'Hermes', 'query': 'severity=medium', 'host': HERMES, 'model': HERMES_MODEL,
+         'timeout': 150, 'every': 300, 'prompt': _prompt_medium},
+        {'label': 'Watchtower', 'query': 'severity=low', 'host': WATCHTOWER, 'model': WATCHTOWER_MODEL,
+         'timeout': 150, 'every': 900, 'prompt': _prompt_low},
+    )
 
     def setup(self):
         self._analyzed = _BoundedSet(10000)
+        self._next_due = {}
 
     def scan(self):
-        """Take up to 3 high-severity findings that have no AI analysis yet, ask the Ollama model for a short
-        assessment of each and save it. A finding is only marked done once the save succeeded, so failures are
-        retried next cycle."""
+        """Run each tier that is due: take up to 3 unanalyzed threats of its severity, ask its model and save the answer."""
+        now = time.monotonic()
+        for tier in self.TIERS:
+            if now < self._next_due.get(tier['label'], 0):
+                continue
+            self._next_due[tier['label']] = now + tier['every'] - 5   # 5 s slack so a tier is not skipped by timer jitter
+            self._scan_tier(tier)
+
+    def _scan_tier(self, tier):
+        label = tier['label']
         try:
-            r = _api_get(f'{API}/threats/?unanalyzed=true&severity=high%2B&limit=5', timeout=5)
+            r = _api_get(f"{API}/threats/?unanalyzed=true&{tier['query']}&limit=5", timeout=5)
             threats = r.json() if r.status_code == 200 else []
             batch = [t for t in threats if t.get('id') not in self._analyzed][:3]
             for threat in batch:
-                prompt = (
-                    'You are a cybersecurity analyst. In 2 sentences, assess this threat and recommend action: '
-                    f"Type={threat.get('type')} Severity={threat.get('severity')} "
-                    f"Source={threat.get('url')} Description={threat.get('description','')[:200]}"
-                )
-                # FIX: was hardcoded 'llama3' — now uses OLLAMA_MODEL env var (default 'llama3')
                 try:
-# 60 s is enough here; the slower local models below are given 150 s
-                    resp = SESSION.post(f'{OLLAMA}/api/generate',
-                                         json={'model': OLLAMA_MODEL, 'prompt': prompt, 'stream': False},
-                                         timeout=60)
+                    resp = SESSION.post(f"{tier['host']}/api/generate",
+                                         json={'model': tier['model'], 'prompt': tier['prompt'](threat), 'stream': False},
+                                         timeout=tier['timeout'])
                 except requests.exceptions.RequestException as e:
                     # Don't mark as analyzed on timeout/connection error — retry next cycle
-                    self.log.warning(f'Ollama request failed for threat {threat["id"]}: {e}')
+                    self.log.warning(f'{label} request failed for threat {threat["id"]}: {e}')
                     continue
                 if resp.status_code == 200:
                     analysis = resp.json().get('response', '')
-                    self.log.info(f'AI analysis for threat {threat["id"]}: {analysis[:100]}')
+                    self.log.info(f'{label} analysis for threat {threat["id"]}: {analysis[:100]}')
                     put = SESSION.put(f'{API}/threats/{threat["id"]}',
-                                       json={'ai_analyzed': True, 'ai_verdict': {'analysis': analysis, 'model': OLLAMA_MODEL}},
+                                       json={'ai_analyzed': True, 'ai_verdict': {'analysis': analysis, 'model': tier['model']}},
                                        headers=_headers(), timeout=5)
-                    # FIX: only mark analyzed once the verdict is confirmed saved —
-                    # previously this was set before the HTTP call, so a timeout
-                    # permanently orphaned the threat (ai_analyzed stayed False forever).
+                    # Only mark analyzed once the verdict is confirmed saved: setting it before the HTTP call let a
+                    # timeout orphan the threat for good (ai_analyzed stayed False).
                     if put.status_code == 200:
                         self._analyzed.add(threat['id'])
                 else:
-                    self.log.warning(f'Ollama returned {resp.status_code} for threat {threat["id"]}')
+                    self.log.warning(f'{label} returned {resp.status_code} for threat {threat["id"]}')
         except Exception as e:
-            self.log.warning(f'OllamaAnalyzerAgent error: {e}')
-
-
-# ── 9. Hermes AI Analyzer Agent ───────────────────────────────────────────────
-class HermesAnalyzerAgent(BaseAgent):
-    name_id = 'HermesAnalyzerAgent'
-    role = 'ai_analyzer'
-    description = f'AI threat analysis via Ollama {HERMES_MODEL} — IOC extraction and remediation for medium-severity threats'
-    interval = 300  # 5 min, offset from Ollama by stagger in main
-
-    def setup(self):
-        self._analyzed = _BoundedSet(10000)
-
-    def scan(self):
-        """Same job as OllamaAnalyzerAgent.scan but for medium-severity findings: ask the Hermes model to extract
-        indicators (IPs, domains, hashes) and suggest one fix, then save the answer."""
-        try:
-            r = _api_get(f'{API}/threats/?unanalyzed=true&severity=medium&limit=5', timeout=5)
-            threats = r.json() if r.status_code == 200 else []
-            batch = [t for t in threats if t.get('id') not in self._analyzed][:3]
-            for threat in batch:
-                prompt = (
-                    'You are a cybersecurity analyst specializing in threat intelligence. '
-                    'For the following medium-severity threat, extract any IOCs (IPs, domains, hashes) '
-                    'and provide one concrete remediation step: '
-                    f"Type={threat.get('type')} Source={threat.get('url')} "
-                    f"Description={threat.get('description','')[:200]}"
-                )
-                try:
-                    # Local CPU-only inference measured at ~48s for a typical
-                    # IOC-extraction response (vs. OllamaAnalyzerAgent's remote
-                    # GPU-backed endpoint, which never times out at 60s) — 60s left
-                    # almost no margin and caused most Hermes calls to time out and
-                    # retry from scratch every cycle, wasting the work already done.
-                    resp = SESSION.post(f'{HERMES}/api/generate',
-                                         json={'model': HERMES_MODEL, 'prompt': prompt, 'stream': False},
-                                         timeout=150)
-                except requests.exceptions.RequestException as e:
-                    # Don't mark as analyzed on timeout/connection error — retry next cycle
-                    self.log.warning(f'Hermes request failed for threat {threat["id"]}: {e}')
-                    continue
-                if resp.status_code == 200:
-                    analysis = resp.json().get('response', '')
-                    self.log.info(f'Hermes analysis for threat {threat["id"]}: {analysis[:100]}')
-                    put = SESSION.put(f'{API}/threats/{threat["id"]}',
-                                       json={'ai_analyzed': True, 'ai_verdict': {'analysis': analysis, 'model': HERMES_MODEL}},
-                                       headers=_headers(), timeout=5)
-                    # FIX: only mark analyzed once the verdict is confirmed saved —
-                    # previously this was set before the HTTP call, so a timeout
-                    # permanently orphaned the threat (ai_analyzed stayed False forever).
-                    if put.status_code == 200:
-                        self._analyzed.add(threat['id'])
-                else:
-                    self.log.warning(f'Hermes returned {resp.status_code} for threat {threat["id"]}')
-        except Exception as e:
-            self.log.warning(f'HermesAnalyzerAgent error: {e}')
-
-
-# ── 9b. Watchtower AI Analyzer Agent ────────────────────────────────────────────
-class WatchtowerAnalyzerAgent(BaseAgent):
-    name_id = 'WatchtowerAnalyzerAgent'
-    role = 'ai_analyzer'
-    description = f'AI threat analysis via Ollama {WATCHTOWER_MODEL} on watchtower — triage for low-severity threats'
-    interval = 900  # 15 min (was 5): eases watchtower heat; offset from Ollama/Hermes by stagger in main
-
-    def setup(self):
-        self._analyzed = _BoundedSet(10000)
-
-    def scan(self):
-        """Same job as OllamaAnalyzerAgent.scan but for low-severity findings: ask the Watchtower model for a short
-        triage note and save it."""
-        try:
-            r = _api_get(f'{API}/threats/?unanalyzed=true&severity=low&limit=5', timeout=5)
-            threats = r.json() if r.status_code == 200 else []
-            batch = [t for t in threats if t.get('id') not in self._analyzed][:3]
-            for threat in batch:
-                prompt = (
-                    'You are a cybersecurity analyst. In 1-2 sentences, triage this low-severity '
-                    'threat and note whether it warrants escalation: '
-                    f"Type={threat.get('type')} Source={threat.get('url')} "
-                    f"Description={threat.get('description','')[:200]}"
-                )
-                try:
-# 150 s, as for Hermes: this model runs on a slower machine than Ollama's
-                    resp = SESSION.post(f'{WATCHTOWER}/api/generate',
-                                         json={'model': WATCHTOWER_MODEL, 'prompt': prompt, 'stream': False},
-                                         timeout=150)
-                except requests.exceptions.RequestException as e:
-                    # Don't mark as analyzed on timeout/connection error — retry next cycle
-                    self.log.warning(f'Watchtower request failed for threat {threat["id"]}: {e}')
-                    continue
-                if resp.status_code == 200:
-                    analysis = resp.json().get('response', '')
-                    self.log.info(f'Watchtower analysis for threat {threat["id"]}: {analysis[:100]}')
-                    put = SESSION.put(f'{API}/threats/{threat["id"]}',
-                                       json={'ai_analyzed': True, 'ai_verdict': {'analysis': analysis, 'model': WATCHTOWER_MODEL}},
-                                       headers=_headers(), timeout=5)
-                    # Only mark analyzed once the verdict is confirmed saved — mirrors
-                    # the fix applied to Ollama/Hermes so timeouts don't orphan threats.
-                    if put.status_code == 200:
-                        self._analyzed.add(threat['id'])
-                else:
-                    self.log.warning(f'Watchtower returned {resp.status_code} for threat {threat["id"]}')
-        except Exception as e:
-            self.log.warning(f'WatchtowerAnalyzerAgent error: {e}')
+            self.log.warning(f'LocalAnalyzerAgent {label} tier error: {e}')
 
 
 # ── 9c. Swarm Consensus Agent (added 2026-08-18) ────────────────────────────────
@@ -1615,7 +1548,7 @@ class RemediationSweepAgent(BaseAgent):
                           (f", errors: {body['errors']}" if body.get('errors') else ''))
 
 
-# ── 10. Threat Feed Agent ──────────────────────────────────────────────────────
+# ── 10. Email quarantine ──────────────────────────────────────────────────
 _QUARANTINE_SEVERITY = {
     'high confidence phish': 'critical',
     'phish':                 'high',
@@ -1665,73 +1598,6 @@ class EmailQuarantineAgent(BaseAgent):
             done.append(entry['id'])
         if done:
             quarantine_dropbox.mark_processed(ssai_config.QUARANTINE_DROPBOX_PATH, done)
-
-
-class ThreatFeedAgent(BaseAgent):
-    name_id = 'ThreatFeedAgent'
-    role = 'intel_collector'
-    description = 'Pulls from public threat intelligence feeds (URLhaus, abuse.ch)'
-    interval = 900  # 15 min
-
-    def setup(self):
-        self._seen = _BoundedSet(10000)
-
-    def scan(self):
-        """Download the public URLhaus list of recent malware URLs and report up to 5 new online ones per cycle as
-        informational findings. The attempt is recorded in the state store's sync log."""
-        # URLhaus's JSON API now answers 401 without an abuse.ch Auth-Key (this agent silently
-        # produced nothing because of a bare `except: pass`). The public CSV export needs no key
-        # and carries each URL's classification and tags. These are threat-intel listings of
-        # malware hosted elsewhere, not something detected on this network, so severity is 'info'.
-        if getattr(self, '_retired', False):
-            return
-        sync_id = state_store.store().sync_start('urlhaus-csv')
-        try:
-            # The shared session reuses a keep-alive connection that has been idle ~15 min, which
-            # the server has usually closed ("Remote end closed connection"); one retry opens a fresh one.
-            for attempt in (1, 2):
-                try:
-                    r = SESSION.get('https://urlhaus.abuse.ch/downloads/csv_recent/', timeout=45)
-                    break
-                except requests.exceptions.ConnectionError:
-                    if attempt == 2:
-                        raise
-            if r.status_code == 410:
-                # abuse.ch has retired this download for good: say so once and stop asking every cycle.
-                self._retired = True
-                self.log.warning('URLhaus CSV feed has been retired by abuse.ch (HTTP 410); this agent will stay idle')
-                state_store.store().sync_finish(sync_id, False, r.status_code)
-                return
-            if r.status_code != 200:
-                self.log.warning(f'URLhaus CSV feed returned HTTP {r.status_code}')
-                state_store.store().sync_finish(sync_id, False, r.status_code)
-                return
-            submitted = 0
-            for row in csv.reader(l for l in r.text.splitlines() if l and not l.startswith('#')):
-# columns used from the URLhaus CSV: row[2] = URL, row[3] = status, row[6] = tags; skip short or offline rows
-                if len(row) < 9 or row[3] != 'online':
-                    continue
-                url = row[2].strip()
-                if not url or url in self._seen:
-                    continue
-                self._seen.add(url)
-                tags = row[6] if row[6] and row[6] != 'None' else 'untagged'
-                self._submit(
-                    url=url,
-                    threat_type='malware-url',
-                    severity='info',
-                    description=f'Threat intel (URLhaus): malware distribution URL [{tags}] - public feed listing, not detected on your network',
-                    detected_by=self.name_id,
-                )
-                submitted += 1
-# cap per cycle so one pull of the public list does not flood the dashboard
-                if submitted >= 5:
-                    break
-            self.log.info(f'ThreatFeed: submitted {submitted} new URLhaus URLs')
-            state_store.store().sync_finish(sync_id, True, r.status_code, submitted)
-        except Exception as e:
-            self.log.warning(f'ThreatFeed scan failed: {e}')
-            state_store.store().sync_finish(sync_id, False, note=f'{type(e).__name__}: {e}')
 
 
 # ── 10b. Intel Feed Agent ─────────────────────────────────────────────────────
@@ -1804,53 +1670,18 @@ class IntelFeedAgent(BaseAgent):
         self.log.info(f'IntelFeed: {loaded} listed this cycle, {st["entries"]} in the store {st["by_kind"]}, {expired} expired')
 
 
-# ── 11. Service Watcher Agent ─────────────────────────────────────────────────
-class ServiceWatchAgent(BaseAgent):
-    name_id = 'ServiceWatchAgent'
-    role = 'service_monitor'
-    description = 'Monitors critical systemd services for unexpected stops or failures'
+# ── 12. Host Health Agent (services, disk space, critical files) ───────────────
+class HostHealthAgent(BaseAgent):
+    """The host's own state in one pass: critical systemd services, disk space and critical-file integrity. It
+    replaces three agents that each woke on their own timer for a few milliseconds of work. Each check keeps its own
+    cadence (services every cycle, disk and files every 5 minutes)."""
+    name_id = 'HostHealthAgent'
+    role = 'host_health'
+    description = 'Monitors critical services, disk space and critical system files'
     interval = 60
+    SLOW_EVERY = 300   # seconds between the disk and file checks
 
     WATCHED = WATCHED_SERVICES
-
-    def setup(self):
-        self._states = {}
-        self._told_no_systemd = False
-
-    def scan(self):
-        """Ask systemd whether each watched service is active and report one that was active on the previous scan and
-        is not now."""
-        if shutil.which('systemctl') is None:
-            # A container or a non-systemd machine has no services to watch: say so once instead of failing every minute.
-            if not self._told_no_systemd:
-                self._told_no_systemd = True
-                self.log.info('ServiceWatchAgent: no systemctl here (container or non-systemd system), so there are no services to watch')
-            return
-        for svc in self.WATCHED:
-            try:
-                r = subprocess.run(['systemctl', 'is-active', svc],
-                                   capture_output=True, text=True, timeout=5)
-                state = r.stdout.strip()
-                prev = self._states.get(svc)
-                self._states[svc] = state
-                if prev and prev == 'active' and state != 'active':
-                    self._submit(
-                        url=f'service://{svc}',
-                        threat_type='service-failure',
-                        severity='high',
-                        description=f'Critical service {svc} changed state: {prev} → {state}',
-                        detected_by=self.name_id,
-                    )
-            except Exception as e:
-                _warn_api(f'service check {svc}', e)
-
-
-# ── 12. Disk/File Integrity Agent ─────────────────────────────────────────────
-class FileIntegrityAgent(BaseAgent):
-    name_id = 'FileIntegrityAgent'
-    role = 'file_integrity'
-    description = 'Checks for unexpected modifications to critical system files'
-    interval = 300
 
     WATCH_PATHS = ['/etc/passwd', '/etc/shadow', '/etc/sudoers', '/etc/ssh/sshd_config',
                    os.path.join(ssai_config.BACKEND_DIR, 'app.py')]
@@ -1901,6 +1732,9 @@ class FileIntegrityAgent(BaseAgent):
     def setup(self):
         """Load the saved baseline, and fingerprint the watched files not yet in it, so scan() has something to
         compare against."""
+        self._states = {}
+        self._told_no_systemd = False
+        self._slow_due = 0.0
         saved_sigs, saved_gone = self._load_baseline()
         self._sigs = {}
         self._from_disk = set()
@@ -1919,6 +1753,20 @@ class FileIntegrityAgent(BaseAgent):
         self._save_baseline()
 
     def scan(self):
+        """Check services every cycle; check disk space and critical files every SLOW_EVERY seconds. A failure in one
+        check is logged and does not stop the others."""
+        checks = [('service', self._check_services)]
+        now = time.monotonic()
+        if now >= self._slow_due:
+            self._slow_due = now + self.SLOW_EVERY - 5
+            checks += [('disk', self._check_disk), ('file-integrity', self._check_files)]
+        for label, check in checks:
+            try:
+                check()
+            except Exception as e:
+                self.log.error(f'{label} check error: {e}')
+
+    def _check_files(self):
         """Compare each watched file's current fingerprint with its baseline and report files that were deleted,
         recreated or modified; save the new baseline when anything changed."""
         dirty = False
@@ -1971,15 +1819,34 @@ class FileIntegrityAgent(BaseAgent):
         if dirty:
             self._save_baseline()
 
+    def _check_services(self):
+        """Ask systemd whether each watched service is active and report one that was active on the previous scan and
+        is not now."""
+        if shutil.which('systemctl') is None:
+            # A container or a non-systemd machine has no services to watch: say so once instead of failing every minute.
+            if not self._told_no_systemd:
+                self._told_no_systemd = True
+                self.log.info('ServiceWatchAgent: no systemctl here (container or non-systemd system), so there are no services to watch')
+            return
+        for svc in self.WATCHED:
+            try:
+                r = subprocess.run(['systemctl', 'is-active', svc],
+                                   capture_output=True, text=True, timeout=5)
+                state = r.stdout.strip()
+                prev = self._states.get(svc)
+                self._states[svc] = state
+                if prev and prev == 'active' and state != 'active':
+                    self._submit(
+                        url=f'service://{svc}',
+                        threat_type='service-failure',
+                        severity='high',
+                        description=f'Critical service {svc} changed state: {prev} → {state}',
+                        detected_by=self.name_id,
+                    )
+            except Exception as e:
+                _warn_api(f'service check {svc}', e)
 
-# ── 13. Disk Space Agent ──────────────────────────────────────────────────────
-class DiskSpaceAgent(BaseAgent):
-    name_id = 'DiskSpaceAgent'
-    role = 'resource_monitor'
-    description = 'Monitors disk usage — full disks hide logs and enable attacks'
-    interval = 300
-
-    def scan(self):
+    def _check_disk(self):
         """Run `df` and report any filesystem that is 90% full or more (high severity from 95%). A full disk stops
         logging, which lets an attacker hide."""
         try:
@@ -2001,17 +1868,6 @@ class DiskSpaceAgent(BaseAgent):
                         )
         except Exception as e:
             self.log.error(f'Disk check error: {e}')
-
-
-# ── 14. Browser Extension Agent (heartbeat proxy) ─────────────────────────────
-class BrowserExtAgent(BaseAgent):
-    name_id = 'BrowserExtAgent'
-    role = 'browser_proxy'
-    description = 'Proxy agent representing Chrome/Firefox SwarmSentinel Shield extensions'
-    interval = 30
-
-    def scan(self):
-        pass  # Just heartbeats — real scanning done by extensions
 
 
 # ── 16. Red-team agent ────────────────────────────────────────────────────────
@@ -2061,21 +1917,14 @@ AGENTS = [
     AuthLogAgent,
     SyslogAgent,
     PiHoleAgent,
-    PortMonitorAgent,
     ProcessMonitorAgent,
-    NetworkConnAgent,
-    OllamaAnalyzerAgent,
-    HermesAnalyzerAgent,
-    WatchtowerAnalyzerAgent,
+    SocketWatchAgent,
+    HostHealthAgent,
+    LocalAnalyzerAgent,
     SwarmConsensusAgent,
     ConsensusVerifierAgent,
     RemediationSweepAgent,
-    ThreatFeedAgent,
     IntelFeedAgent,
-    ServiceWatchAgent,
-    FileIntegrityAgent,
-    DiskSpaceAgent,
-    BrowserExtAgent,
     EmailQuarantineAgent,
     RedTeamAgent,
 ]
@@ -2085,6 +1934,11 @@ def _note_disabled(AgentClass, log):
     (a node runs host sensors only), so they are not registered and do not clutter the hub with rows per machine."""
     name = AgentClass.name_id
     if ROLE == 'node' and name in agent_catalog.HUB_ONLY:
+        return False
+    unmet = agent_catalog.unmet_requirement(name)
+    if unmet and name not in agent_catalog.load_overrides():
+        # Nothing here for it to watch (no Pi-hole, no nmap): not an option either, and it starts by itself when that changes.
+        log.info(f'{name} not started: {unmet}')
         return False
     register(name, AgentClass.role, AgentClass.description)
     heartbeat(name, status='disabled')
