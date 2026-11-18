@@ -2,6 +2,11 @@ import requests
 import json
 import os
 
+try:
+    import model_config
+except ImportError:                       # imported as agents.ai_analyzer
+    from agents import model_config
+
 OLLAMA_URL = os.environ.get('OLLAMA_URL', 'http://localhost:11434')
 MODEL = os.environ.get('OLLAMA_MODEL', 'llama3')
 
@@ -9,7 +14,7 @@ MODEL = os.environ.get('OLLAMA_MODEL', 'llama3')
 def analyze(prompt: str) -> str:
     response = requests.post(
         f'{OLLAMA_URL}/api/generate',
-        json={'model': MODEL, 'prompt': prompt, 'stream': False},
+        json={'model': MODEL, 'prompt': prompt, 'stream': False, 'keep_alive': model_config.ollama_keep_alive()},
         timeout=120,
     )
     response.raise_for_status()

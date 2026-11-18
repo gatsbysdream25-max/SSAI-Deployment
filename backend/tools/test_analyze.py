@@ -14,6 +14,22 @@ sys.path[:0] = [os.path.join(os.path.dirname(HERE), 'agents'), os.path.dirname(H
 import ai_swarm_agent as swarm  # noqa: E402
 import sanitizer  # noqa: E402
 
+_AUDIT_PATCH = None
+
+
+def setUpModule():
+    """Every test in this file: cloud-gate audit lines go to a temporary file, never the real (root-owned on a live hub)
+    instance/cloud_audit.jsonl. Module-wide so a new test class cannot forget it (FallbackPanel did)."""
+    global _AUDIT_PATCH
+    import tempfile
+    _AUDIT_PATCH = mock.patch.object(sanitizer, 'audit_path',
+                                     return_value=os.path.join(tempfile.mkdtemp(), 'cloud_audit.jsonl'))
+    _AUDIT_PATCH.start()
+
+
+def tearDownModule():
+    _AUDIT_PATCH.stop()
+
 
 class FakeProvider:
     def __init__(self, name, fn, delay=0.0):

@@ -90,4 +90,11 @@ def sweep():
         return jsonify({"error": "Unauthorized"}), 401
     from app import _AUDIT_PATH
     result = remediation_queue.sweep(audit_path=_AUDIT_PATH)
+    try:                                       # automatic responses (auto_response.py) end at their time limit too
+        import auto_response
+        auto = auto_response.sweep(_AUDIT_PATH)
+        result["auto_expired"] = auto["expired"]
+        result["errors"] = list(result.get("errors") or []) + auto["errors"]
+    except Exception as e:                     # noqa: BLE001 -- the proposal sweep above still counts
+        result["errors"] = list(result.get("errors") or []) + [f"automatic responses: {type(e).__name__}: {e}"]
     return jsonify(result)

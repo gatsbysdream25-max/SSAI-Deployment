@@ -35,6 +35,7 @@ from routes.agents import agents_bp
 from routes.status import status_bp
 from routes.remediation import remediation_bp
 from routes.autonomy import autonomy_bp
+from routes.auto_response import auto_bp
 from routes.copilot import copilot_bp
 from routes.nodes import nodes_bp
 from routes.node_actions import node_actions_bp
@@ -230,6 +231,7 @@ app.register_blueprint(agents_bp,  url_prefix="/api/agents")
 app.register_blueprint(status_bp,  url_prefix="/api/status")
 app.register_blueprint(remediation_bp, url_prefix="/api/remediation")
 app.register_blueprint(autonomy_bp, url_prefix="/api/autonomy")      # permissions to act without asking (phase 7)
+app.register_blueprint(auto_bp, url_prefix="/api/auto")              # automatic response: opt-in, dry run by default
 app.register_blueprint(allowlist_bp)                               # /api/allowlist
 app.register_blueprint(quarantine_bp)                              # /api/quarantine/import
 app.register_blueprint(settings_bp)                                # /api/settings/agents, /api/settings/ai_routing
@@ -414,12 +416,16 @@ def github_stats():
             baseline = state.get('committed_baseline', 0)
         except (OSError, ValueError):
             pass
-    # 'committed' = rows at/below the reporter cursor minus a user-set baseline (reset without touching the cursor)
-    total_committed = max(0, (Threat.query.filter(Threat.id <= last_id).count() if last_id else 0) - baseline)
-    pending = Threat.query.filter(Threat.id > last_id).count() if last_id else Threat.query.count()
+    state = {}
+    try:
+        with open(state_file) as f:
+            state = _json.load(f)
+    except (OSError, ValueError):
+        pass
+    total_committed, pending, repeats = _github_counts(state, last_id, baseline)
     return jsonify({'enabled': True, 'repo': 'gatsbysdream25-max/SwarmSentinel',
-                    'total_committed': total_committed, 'pending': pending,
-                    'last_commit': last_push})
+                    'total_committed': total_committed, 'pending': pending, 'repeats_waiting': repeats,
+                    'last_commit': last_push, 'last_check': state.get('last_check') if isinstance(state, dict) else None})
 
 
 @app.route('/api/summary', methods=['GET'])
@@ -739,6 +745,60 @@ def identify_threat(threat_id):
     return jsonify(out)
 
 
+_LOCAL_PREFIXES = ('localhost', '127.', '::1', '[::1]', 'process://', 'disk://', 'service://', 'ssh://', 'file://', '/')
+
+
+@app.route('/api/identify/labels', methods=['GET'])
+def identify_labels():
+    """Admin only: a short device NAME for each listed finding (?ids=1,2,3), for the IOC / Origin column. Pi-hole's name, then
+    reverse DNS, then the network card's maker; a finding about this machine itself ("localhost:8080", a process, a file) is
+    named after the machine that reported it. Names only: the real address never leaves the hub. Cached 10 minutes."""
+    import socket as _socket_lbl
+    import identify
+    import remediation
+    denied = _identify_guard()
+    if denied:
+        return denied
+    try:
+        ids = [int(x) for x in (request.args.get('ids') or '').split(',') if x.strip()][:300]
+    except ValueError:
+        return jsonify({'ok': False, 'error': 'ids must be numbers separated by commas'}), 400
+    rows = Threat.query.filter(Threat.id.in_(ids)).all() if ids else []
+    deps = identify.label_deps()
+    pihole = remediation.PiHole()
+    if pihole.host and pihole.password:
+        devices = {}                                   # one Pi-hole call per request, not one per address
+
+        def from_pihole(ip):
+            if 'all' not in devices:
+                try:
+                    devices['all'] = pihole.get_json('/api/network/devices')
+                except Exception:                      # noqa: BLE001 -- the other sources still answer
+                    devices['all'] = {}
+
+            class _Cached:
+                def get_json(self, _path):
+                    return devices['all']
+            return identify.pihole_device(ip, _Cached())
+        deps.pihole = from_pihole
+    hub = _socket_lbl.gethostname()
+    labels = {}
+    for t in rows:
+        raw = (t.real_source or t.url or '').strip()
+        if raw.lower().startswith(_LOCAL_PREFIXES):
+            labels[t.id] = {'name': identify.clean(t.node_id or hub, 60), 'how': 'this-machine'}
+            continue
+        ext = identify.extract_host(raw)
+        if ext is None or ext[0] != 'ip':
+            continue
+        lab = identify.device_label(ext[1], deps)
+        if lab['how'] == 'this-machine':
+            lab = {'name': identify.clean(t.node_id or hub, 60), 'how': 'this-machine'}
+        if lab.get('name'):
+            labels[t.id] = lab
+    return jsonify({'ok': True, 'labels': labels})
+
+
 @app.route('/api/identify', methods=['GET'])
 def identify_address():
     """Admin only: identify any IP address, domain or URL typed in (?target=...). Add ports=1 to also probe the device's
@@ -820,6 +880,39 @@ def _snapshot_models():
     return models_agg, len(ai_nodes)
 
 
+_GH_RECENT = {'at': 0.0, 'rows': []}
+
+
+def _github_recent(limit=5):
+    """The newest ledger commits (hash, message, date), read from git at most once a minute. [] when git is unavailable."""
+    import subprocess
+    if _time.time() - _GH_RECENT['at'] < 60:
+        return _GH_RECENT['rows']
+    rows = []
+    try:
+        out = subprocess.run(['git', 'log', f'-{int(limit)}', '--format=%h%x1f%s%x1f%cI', '--', 'threats/'],
+                             cwd=ssai_config.THREAT_INTEL_REPO, capture_output=True, text=True, timeout=5)
+        if out.returncode == 0:
+            for line in out.stdout.splitlines():
+                parts = line.split('\x1f')
+                if len(parts) == 3:
+                    rows.append({'hash': parts[0], 'message': parts[1][:120], 'date': parts[2]})
+    except (OSError, subprocess.SubprocessError):
+        rows = []
+    _GH_RECENT.update(at=_time.time(), rows=rows)
+    return rows
+
+
+def _github_last_check():
+    import json as _json3
+    try:
+        with open(ssai_config.GITHUB_STATE_PATH) as f:
+            state = _json3.load(f)
+        return state.get('last_check') if isinstance(state, dict) else None
+    except (OSError, ValueError):
+        return None
+
+
 def _snapshot_github(total_threats):
     """What the ledger pusher reports (same logic as /api/github_stats): (last push time, committed so far, still
     waiting)."""
@@ -835,9 +928,48 @@ def _snapshot_github(total_threats):
             baseline = state.get('committed_baseline', 0)
         except (OSError, ValueError):
             pass
-    total_committed = max(0, (Threat.query.filter(Threat.id <= last_id).count() if last_id else 0) - baseline)
-    pending = Threat.query.filter(Threat.id > last_id).count() if last_id else total_threats
+    total_committed, pending, _ = _github_counts(locals().get('state') or {}, last_id, baseline)
     return last_push, total_committed, pending
+
+
+_LEDGER_SIZE = {'at': 0.0, 'n': None}
+
+
+def _ledger_size():
+    """How many distinct threats the published ledger holds (threats/known_threats.json), re-read at most once a minute."""
+    import json as _json4
+    if _time.time() - _LEDGER_SIZE['at'] < 60:
+        return _LEDGER_SIZE['n']
+    try:
+        with open(os.path.join(ssai_config.THREAT_INTEL_REPO, 'threats', 'known_threats.json')) as f:
+            data = _json4.load(f)
+        n = len(data) if isinstance(data, list) else None
+    except (OSError, ValueError):
+        n = None
+    _LEDGER_SIZE.update(at=_time.time(), n=n)
+    return n
+
+
+def _github_counts(state, last_id, baseline):
+    """(threats published, sightings waiting, repeat sightings waiting). Published = the ledger's size when the reporter
+    recorded it: the old 'rows at or below the cursor minus a baseline' fell to 0 once the retention job deleted old rows."""
+    try:
+        state = state if isinstance(state, dict) else {}
+        if isinstance(state.get('ledger_size'), int):
+            committed = state['ledger_size']
+        else:                               # a reporter that has not run since Week 2: count the published ledger itself
+            committed = _ledger_size()
+            if committed is None:
+                committed = max(0, (Threat.query.filter(Threat.id <= last_id).count() if last_id else 0) - baseline)
+        new = Threat.query.filter(Threat.id > last_id).count() if last_id else Threat.query.count()
+        since = state.get('repeats_since') or state.get('last_push')
+        repeats = 0
+        if since and last_id:
+            cutoff = datetime.fromisoformat(str(since)).replace(tzinfo=None)
+            repeats = Threat.query.filter(Threat.id <= last_id, Threat.last_seen.isnot(None), Threat.last_seen > cutoff).count()
+        return committed, new + repeats, repeats
+    except Exception:                       # noqa: BLE001 -- a broken state file must not break the dashboard
+        return 0, 0, 0
 
 
 def _snapshot_provider_health():
@@ -914,7 +1046,7 @@ def dashboard_snapshot():
         'github_stats': {
             'enabled': True, 'repo': 'gatsbysdream25-max/SwarmSentinel',
             'total_committed': total_committed, 'pending': pending,
-            'last_commit': last_push,
+            'last_commit': last_push, 'last_check': _github_last_check(), 'recent': _github_recent(),
         },
     })
 

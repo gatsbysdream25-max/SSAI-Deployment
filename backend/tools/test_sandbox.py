@@ -80,9 +80,17 @@ class DistributedBruteForce(unittest.TestCase):
         for i in range(30):
             a._note_spread('203.0.113.5', now=1000.0 + i)               # one address: the per-address rule's job
         b = self.agent()
-        for i in range(30):
-            b._note_spread(f'198.51.100.{i % 6}', now=1000.0 + i * 60)  # 30 failures over 30 minutes: under the rate
+        for i in range(20):
+            b._note_spread(f'198.51.100.{i % 6}', now=1000.0 + i * 600)  # one failure every 10 minutes: under every rule
         self.assertEqual((a.sent, b.sent), ([], []))
+
+    def test_thirty_failures_in_thirty_minutes_is_now_caught_by_the_hour_rule(self):
+        # This trickle stayed under the 10-minute rule; the 1-hour rule (12 failures, 4 addresses) added 2026-11-15 sees it.
+        b = self.agent()
+        for i in range(30):
+            b._note_spread(f'198.51.100.{i % 6}', now=1000.0 + i * 60)
+        self.assertEqual(len(b.sent), 1)
+        self.assertIn('1 hour', b.sent[0]['description'])
 
 
 class IntervalScale(unittest.TestCase):

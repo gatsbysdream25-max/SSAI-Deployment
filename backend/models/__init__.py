@@ -335,6 +335,32 @@ class NodeAction(db.Model):
 # Approve-first remediation queue: a high-confidence multi-AI "malicious" verdict proposes a block instead of applying it, so a
 # person always has the last word. Every approved block gets an expiry (ttl) and is reverted by RemediationSweepAgent, so an
 # approval is never a silent forever-block.
+# One automatic response (auto_response.py): what SSAI did, or in dry run would have done, on its own under the operator's
+# policy. Every row has an audit line written BEFORE it; live blocks and pauses end at expires_at unless a person acts first.
+class AutoAction(db.Model):
+    __table_args__ = (
+        db.Index('ix_autoaction_status_created', 'status', 'created_at'),
+    )
+    id          = db.Column(db.Integer, primary_key=True)
+    threat_id   = db.Column(db.Integer, nullable=True, index=True)
+    action      = db.Column(db.String(30), nullable=False)    # block-attacker-ip | block-bad-ip | block-bad-domain | freeze-process
+    kind        = db.Column(db.String(20), nullable=False)    # ip | domain | process
+    target      = db.Column(db.String(500), nullable=False)   # address, domain, or process id
+    dry_run     = db.Column(db.Boolean, nullable=False, default=True)
+    status      = db.Column(db.String(20), nullable=False)    # would-have | done | failed | undone | expired | terminated
+    detail      = db.Column(db.Text)
+    command_sha = db.Column(db.String(64), nullable=True)     # freeze: hash of the command line, re-checked before resume/kill
+    created_at  = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
+    expires_at  = db.Column(db.DateTime, nullable=True)
+    ended_at    = db.Column(db.DateTime, nullable=True)
+    ended_by    = db.Column(db.String(100), nullable=True)
+
+    def to_dict(self):
+        return {'id': self.id, 'threat_id': self.threat_id, 'action': self.action, 'kind': self.kind, 'target': self.target,
+                'dry_run': self.dry_run, 'status': self.status, 'detail': self.detail, 'created_at': _utc_iso(self.created_at),
+                'expires_at': _utc_iso(self.expires_at), 'ended_at': _utc_iso(self.ended_at), 'ended_by': self.ended_by}
+
+
 class PendingRemediation(db.Model):
     __table_args__ = (
         db.Index('ix_pendingremediation_status', 'status'),

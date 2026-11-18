@@ -249,7 +249,19 @@
       to   { opacity: 1; transform: translateY(0); }
     }
 
-    .gear-menu { position: relative; }
+    .gear-menu { position: relative; flex-shrink: 0; }
+    /* Header text buttons (Settings, Sign out): readable labels that never squeeze into a 26px icon box or get pushed off the
+       right edge. The Settings menu was hard to reach in the far top-right corner (2026-11-16 report from a v0.1.8 install),
+       so it now has a visible label, and the same pages are also linked from the side navigation of both views. */
+    .hdr-btn { background: transparent; border: 1px solid var(--border, #1e2d40); color: var(--text-muted, #5a7080); border-radius: 6px;
+               height: 28px; padding: 0 10px; font: inherit; font-size: 11.5px; white-space: nowrap; cursor: pointer; flex-shrink: 0; }
+    .hdr-btn:hover, .hdr-btn[aria-expanded="true"] { color: var(--accent, #00d4ff); border-color: var(--accent, #00d4ff); }
+    .header-right > * { flex-shrink: 0; }
+    @media (max-width: 1240px) { #clock { display: none; } }
+    @media (max-width: 1080px) { #conn-label, #cloud-label { display: none; } .header-center { display: none; } }
+    .side-settings { display: flex; align-items: center; gap: 6px; margin: 10px 14px; padding: 7px 10px; border: 1px solid var(--border, #1e2d40);
+                     border-radius: 6px; color: var(--text-muted, #5a7080); text-decoration: none; font-size: 12px; }
+    .side-settings:hover { color: var(--accent, #00d4ff); border-color: var(--accent, #00d4ff); }
     .signin-link { color: var(--accent, #00ff88); font-size: 12px; font-weight: 700; text-decoration: none; border: 1px solid var(--accent, #00ff88); border-radius: 6px; padding: 5px 10px; }
     .signin-link:hover { filter: brightness(1.15); }
     .gear-btn { background: transparent; border: 1px solid var(--border, #1e2d40); color: var(--text-muted, #5a7080); border-radius: 4px; width: 26px; height: 26px; font-size: 14px; cursor: pointer; }
@@ -295,8 +307,18 @@
     .tag-collective { background: #1e1040; color: var(--purple); }
     .av-badge    { font-size: 9px; padding: 1px 4px; border-radius: 3px; background: #052533; color: var(--accent); font-weight: 700; margin-left: 3px; }
     .occur-badge { font-size: 9px; padding: 1px 5px; border-radius: 10px; background: #2a1a05; color: #ffb74d; font-weight: 700; margin-left: 5px; }
-    .src-text    { color: var(--text-muted); font-size: 11px; max-width: 160px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-    .time-text   { color: var(--text-muted); font-size: 10px; white-space: nowrap; }
+    .src-text    { color: var(--text-muted); font-size: 11px; max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .src-text .dev-name { display: block; color: var(--text); font-weight: 600; overflow: hidden; text-overflow: ellipsis; }
+    .src-text .src-sub  { font-size: 10.5px; }
+    .masked-tag { margin-left: 4px; padding: 0 5px; font: inherit; font-size: 9px; font-weight: 700; letter-spacing: .05em; cursor: pointer;
+                  color: var(--text-muted); background: transparent; border: 1px dashed var(--border); border-radius: 3px; }
+    .masked-tag:hover { color: var(--accent); border-color: var(--accent); }
+    .help-link { display: block; margin-top: 3px; padding: 0; background: none; border: 0; font: inherit; font-size: 10.5px;
+                 color: var(--accent); cursor: pointer; text-decoration: underline; text-underline-offset: 2px; }
+    .help-cause { border-top: 1px solid var(--border, #1e2d40); padding: 8px 0; }
+    .help-cause p { margin: 4px 0; }
+    .help-cmd { background: #0b111b; border: 1px solid var(--border, #1e2d40); border-radius: 5px; padding: 6px 8px; margin: 4px 0;
+                font-size: 11.5px; white-space: pre-wrap; word-break: break-all; }    .time-text   { color: var(--text-muted); font-size: 10px; white-space: nowrap; }
 
     .tbl-scroll { max-height: 400px; overflow-y: auto; }
     .tbl-scroll::-webkit-scrollbar { width: 4px; }
@@ -390,6 +412,7 @@
       color: var(--text-muted); cursor: pointer; text-align: left;
       border-left: 3px solid transparent;
     }
+    a.home-nav-btn { text-decoration: none; box-sizing: border-box; }
     .home-nav-btn .icon { font-size: 15px; width: 18px; text-align: center; flex-shrink: 0; }
     .home-nav-btn .lbl { flex: 1; }
     .home-nav-btn:hover { background: var(--surface2); color: var(--text); }
@@ -572,7 +595,7 @@
     }
     .dev-apikey-btn:hover { filter: brightness(1.08); }
     /* Read-only display: no settings, API-key entry, threat submission, or row actions */
-    .kiosk .gear-menu, .readonly #screenshot-btn, .readonly .dev-apikey-btn, .readonly .home-upsell, .readonly .action-btn, .readonly .identify-btn { display: none !important; }
+    .kiosk .gear-menu, .kiosk .side-settings, .kiosk a.home-nav-btn[href="/settings"], .readonly #screenshot-btn, .readonly .dev-apikey-btn, .readonly .home-upsell, .readonly .action-btn, .readonly .identify-btn { display: none !important; }
     #identify-modal { position: fixed; inset: 0; background: rgba(0,0,0,.6); z-index: 9999; display: flex; align-items: center; justify-content: center; padding: 16px; }
     .idn-box { position: relative; background: var(--card, #111a27); color: var(--text, #c8d8e8); border: 1px solid var(--border, #1e2d40); border-radius: 10px; max-width: 640px; width: 100%; max-height: 88vh; overflow: auto; padding: 18px 20px; font-size: 13px; }
     .idn-box h3 { margin: 0 24px 6px 0; font-size: 16px; word-break: break-all; }
@@ -589,6 +612,10 @@
   </style>
 </head>
 <body class="{{ 'readonly' if readonly else '' }}{{ ' kiosk' if kiosk else '' }}">
+<div id="ssai-alert-bar" style="display:none;background:#7f1d1d;color:#fff;padding:8px 16px;font-size:13px">
+  <b id="ssai-alert-count"></b> <span id="ssai-alert-text"></span>
+  <a href="/settings#auto-card" style="color:#fff;margin-left:10px;text-decoration:underline">Open alerts</a>
+</div>
 
 <!-- Header -->
 <header>
@@ -614,9 +641,10 @@
     <button class="gear-btn" id="screenshot-btn" data-on-click="clickElement" data-args='["screenshot-input"]' title="Submit a threat from a screenshot">📷</button>
     <input type="file" id="screenshot-input" accept="image/png,image/jpeg,image/webp" style="display:none" data-on-change="uploadScreenshot" data-pass="event">
     {% if show_login %}<a class="signin-link" href="/login?next=/dashboard">Sign in</a>{% endif %}
-    {% if signed_in %}<button class="gear-btn" data-on-click="signOut" title="Sign out">Sign out</button>{% endif %}
+    {% if signed_in %}<button class="hdr-btn" data-on-click="signOut" title="Sign out">Sign out</button>{% endif %}
     <div class="gear-menu">
-      <button class="gear-btn" id="gear-btn" data-on-click="toggleGearMenu" data-pass="event" title="Settings">⚙</button>
+      <button class="hdr-btn" id="gear-btn" data-on-click="toggleGearMenu" data-pass="event" title="Settings"
+              aria-haspopup="true" aria-expanded="false" aria-controls="gear-dropdown">⚙ Settings</button>
       <div class="gear-dropdown" id="gear-dropdown">
         <a href="/settings">🤖 Agents, AI models &amp; keys</a>
         <a href="/setup">🔑 API Keys / Providers</a>
@@ -626,14 +654,18 @@
 </header>
 
 <script src="/static/ssai-actions.js"></script>
+<script src="/static/ssai-help.js"></script>
 <script nonce="{{ csp_nonce }}">
+function setGearMenu(open) {
+  document.getElementById('gear-dropdown').classList.toggle('open', open);
+  document.getElementById('gear-btn').setAttribute('aria-expanded', open ? 'true' : 'false');
+}
 function toggleGearMenu(e) {
   e.stopImmediatePropagation();      // the page-wide click that closes the menu is registered after the dispatcher, so this stops it
-  document.getElementById('gear-dropdown').classList.toggle('open');
+  setGearMenu(!document.getElementById('gear-dropdown').classList.contains('open'));
 }
-document.addEventListener('click', () => {
-  document.getElementById('gear-dropdown').classList.remove('open');
-});
+document.addEventListener('click', () => setGearMenu(false));
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape') setGearMenu(false); });
 </script>
 
 <!-- ═══════════════════ HOME VIEW (plain-language lens) ═══════════════════ -->
@@ -661,8 +693,11 @@ document.addEventListener('click', () => {
         <span class="icon">📜</span><span class="lbl">Activity</span>
       </button>
       <div class="home-nav-divider"></div>
+      <a class="home-nav-btn" href="/settings">
+        <span class="icon">⚙️</span><span class="lbl">Settings</span>
+      </a>
       <button class="home-nav-btn" data-on-click="setMode" data-args='["dev"]'>
-        <span class="icon">⚙️</span><span class="lbl">Developer view</span>
+        <span class="icon">🛠️</span><span class="lbl">Developer view</span>
       </button>
     </nav>
 
@@ -773,6 +808,7 @@ document.addEventListener('click', () => {
           <div class="gh-stat"><div class="gh-num" id="gh-pending">0</div><div class="gh-lbl">Pending</div></div>
           <div class="gh-stat"><div class="gh-num" id="gh-last-lbl" style="font-size:12px;padding-top:4px">—</div><div class="gh-lbl">Last Push</div></div>
         </div>
+        <div id="gh-check" style="padding:2px 14px;font-size:10px;color:var(--text-muted)"></div>
         <div class="gh-recent" id="gh-recent">
           <div class="empty-msg" style="padding:12px">Waiting for first commit…</div>
         </div>
@@ -795,6 +831,7 @@ document.addEventListener('click', () => {
       </div>
     </div>
 
+    <a href="/settings" class="side-settings">⚙ Settings (agents, AI models, keys)</a>
   </aside>
 
   <!-- ═══════════════════ MAIN CONTENT ═══════════════════ -->
@@ -1203,14 +1240,76 @@ function renderTable() {
       <td>${aiCell}</td>
       <td><span class="agent-tag">${esc(t.detected_by || '—')}</span></td>
       <td>${esc(t.category || '—')}</td>
-      <td>${esc(t.description || '—')}${countBadge}${t.av_confirmed ? '<span class="av-badge">AV✓</span>' : ''}</td>
-      <td class="src-text" title="${esc(t.source || '')}">${esc(t.source || '—')}</td>
+      <td>${esc(t.description || '—')}${countBadge}${t.av_confirmed ? '<span class="av-badge">AV✓</span>' : ''}
+        <button class="help-link" ${da('showHelp', [Number(t.id)])}>What this could be?</button></td>
+      <td class="src-text" title="${esc(t.source || '')}">${originCell(t)}</td>
       <td>${actionsCell}</td>
     </tr>`;
   }).join('');
   if (tbody._lastHtml !== rowsHtml) { tbody.innerHTML = rowsHtml; tbody._lastHtml = rowsHtml; }
+  requestLabels(groups.map(g => g.latest.id));
 
   renderHomeView();
+}
+
+// ── IOC / Origin: a device name above the address (2026-11-15). Names come from /api/identify/labels (admin only, names
+// only, never the real address); a display without admin rights just shows the address as before.
+const deviceLabels = {};            // threat id -> {name, how}
+const labelAsked = {};              // threat id -> when we last asked (ms)
+let labelsDenied = false;
+function isMasked(src) { return /(\d\.x{2,}|x{2,}\.\d|x{2,}\.x{2,}|:x{4}(:|\b))/i.test(src || ''); }   // 10.1.xxx.xxx, fd12:3456:xxxx::
+function originCell(t) {
+  const lab = deviceLabels[t.id];
+  const name = lab && lab.name ? `<span class="dev-name" title="${esc(labelHow(lab.how))}">${esc(lab.name)}</span>` : '';
+  const masked = isMasked(t.source) ? ` <button class="masked-tag" ${da('showFindingDetails', [Number(t.id)])} title="This address is hidden on the dashboard: show what is known">MASKED</button>` : '';
+  return `${name}<span class="src-sub">${esc(t.source || '—')}</span>${masked}`;
+}
+function labelHow(how) {
+  return { 'pi-hole': 'name from the Pi-hole', 'reverse-dns': 'name from reverse DNS', 'vendor': 'maker of the network card',
+           'this-machine': 'the machine that reported it' }[how] || '';
+}
+async function requestLabels(ids) {
+  if (labelsDenied || document.body.classList.contains('readonly') || document.body.classList.contains('kiosk')) return;
+  const now = Date.now();
+  const want = ids.filter(id => !(labelAsked[id] && now - labelAsked[id] < 600000)).slice(0, 300);
+  if (!want.length) return;
+  want.forEach(id => { labelAsked[id] = now; });
+  try {
+    const res = await fetch(`/api/identify/labels?ids=${want.join(',')}`, { headers: _authHeaders() });
+    if (res.status === 401 || res.status === 403) { labelsDenied = true; return; }
+    const d = await res.json();
+    let changed = false;
+    for (const [id, lab] of Object.entries(d.labels || {})) {
+      if (!deviceLabels[id] || deviceLabels[id].name !== lab.name) { deviceLabels[id] = lab; changed = true; }
+    }
+    if (changed) renderTable();
+  } catch (e) { /* names are a nicety: the address is still shown */ }
+}
+function findThreat(id) { return allThreats.find(t => Number(t.id) === Number(id)); }
+
+// The MASKED tag: everything the dashboard knows about the finding, without the hidden address.
+function showFindingDetails(id) {
+  const t = findThreat(id);
+  if (!t) return;
+  const lab = deviceLabels[t.id];
+  const rows = [
+    idnRow('Category', t.category), idnRow('Description', t.description), idnRow('Severity', t.severity_label),
+    idnRow('Status', t.status), idnRow('Agent', t.detected_by), idnRow('Machine', t.node_id || 'this hub'),
+    idnRow('First seen', idnTime(t.first_seen)), idnRow('Last seen', idnTime(t.last_seen)),
+    idnRow('Times seen', t.occurrences), idnRow('Device', lab && lab.name ? `${lab.name} (${labelHow(lab.how)})` : ''),
+    idnRow('Device tag', t.source_tag ? `${t.source_tag} (the same tag means the same device)` : 'none'),
+    idnRow('Real address kept', t.identifiable ? 'yes, on the hub only (admins can look it up)' : 'no (recorded before real addresses were kept, or keeping them is switched off)'),
+  ];
+  const look = t.identifiable ? `<button class="idn-btn" ${da('identifyThreat', [Number(t.id)])}>Look up this device</button>` : '';
+  showIdentify(`<h3>Masked address: ${esc(t.source || '')}</h3>
+    <p class="idn-note">Addresses inside your network are hidden on the dashboard. This is what is known about the finding.</p>
+    ${idnTable(rows)}${look}`);
+}
+
+function showHelp(id) {
+  const t = findThreat(id);
+  if (!t || !window.SSAIHelp) return;
+  showIdentify(SSAIHelp.render(t, esc));
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -1237,6 +1336,10 @@ const HOME_COPY = {
                            desc: 'A device on your network reached out to a web address known for hosting malware.' },
   'brute-force':         { icon: '🔨', lvl: 'attention', title: 'Repeated break-in attempts',
                            desc: 'Someone tried to log in over and over and failed. Often an automated bot scanning the internet, not a targeted attack.' },
+  'brute-force-success': { icon: '🚨', lvl: 'attention', title: 'A sign-in worked right after many failed guesses',
+                           desc: 'Someone logged in successfully from an address that had just failed several times. The password may have been guessed: change it and check what that account did.' },
+  'distributed-brute-force': { icon: '🔨', lvl: 'attention', title: 'Break-in attempts spread across many addresses',
+                           desc: 'Many different addresses each tried a few passwords, staying under the usual alarm. Usually a botnet; make sure password sign-in is off or passwords are strong.' },
   'file-modification':   { icon: '📄', lvl: 'attention', title: 'An important file was changed',
                            desc: 'A protected file was modified. Worth confirming this was you or your normal update process.' },
   'suspicious-process':  { icon: '❓', lvl: 'attention', title: 'An unrecognized program is running',
@@ -1703,13 +1806,24 @@ function renderIdentify(d, id) {
 // internal monitor address). The server re-checks everything; this only decides whether to offer the button.
 function blockTarget(t) {
   const s = String((t && (t.url || t.source)) || '').trim();
-  if (!s || /(\d\.x{2,}|x{2,}\.\d|x{2,}\.x{2,})/i.test(s)) return null;
+  if (!s || isMasked(s)) return null;
   let host;
-  const web = s.match(/^(?:https?|ftp):\/\/([^\/:?#\s]+)/i);
-  if (web) host = web[1];
+  const web = s.match(/^(?:https?|ftp):\/\/(\[[0-9a-f:.]+\]|[^\/:?#\s]+)/i);
+  const br = s.match(/^\[([0-9a-f:.]+)(?:%[\w.-]+)?\]/i);
+  if (web) host = web[1].replace(/^\[|\]$/g, '');
   else if (/^[a-z][a-z0-9+.-]*:\/\//i.test(s)) return null;
+  else if (br) host = br[1];                                                   // [2001:db8::5]:4444
+  else if (/^[0-9a-f:.]+(%[\w.-]+)?$/i.test(s) && (s.match(/:/g) || []).length >= 2) host = s.split('%')[0];   // bare IPv6
   else host = s.split(/[\/:?#]/)[0];
   host = host.toLowerCase().replace(/\.$/, '');
+  const mapped = host.match(/^::ffff:(\d{1,3}(?:\.\d{1,3}){3})$/);
+  if (mapped) host = mapped[1];                                                // ::ffff:203.0.113.5 is 203.0.113.5
+  if (host.includes(':')) {
+    // IPv6 (2026-11-18): hex groups, at most one "::"; not loopback, unspecified, link-local or multicast.
+    if (!/^[0-9a-f:]+$/.test(host) || (host.match(/::/g) || []).length > 1 || (!host.includes('::') && host.split(':').length !== 8)) return null;
+    if (/^(::1?|fe[89ab][0-9a-f]?:|ff[0-9a-f]{2}:)/.test(host) || host === '::1') return null;
+    return { kind: 'ip', value: host };
+  }
   if (/^(127\.|0\.|22[4-9]\.|23\d\.|169\.254\.)/.test(host)) return null;
   if (/^\d{1,3}(\.\d{1,3}){3}$/.test(host)) return { kind: 'ip', value: host };
   if (/^([a-z0-9-]+\.)+[a-z]{2,}$/.test(host)) return { kind: 'domain', value: host };
@@ -1976,6 +2090,9 @@ function updateGitHubPanel(gh) {
   if (gh.last_commit) {
     setText('gh-last-lbl', timeSince(gh.last_commit));
   }
+  // Week 2: a quiet ledger is not a stuck one -- say when the reporter last looked.
+  const chk = document.getElementById('gh-check');
+  if (chk) chk.textContent = gh.last_check ? `reporter checked ${timeSince(gh.last_check)}; nothing new means nothing to push` : '';
 
   const recentEl = document.getElementById('gh-recent');
   if (recentEl && gh.recent && gh.recent.length) {
@@ -2255,6 +2372,25 @@ fetch('/api/threats').then(r=>r.json()).then(list => {
 
 pollAll();
 setInterval(pollAll, 5000);
+
+// Week 2: an open (unacknowledged) alert shows as a red bar until a person acknowledges it in Settings.
+async function pollAlerts() {
+  const bar = document.getElementById('ssai-alert-bar');
+  if (!bar) return;
+  try {
+    const res = await fetch('/api/auto/alerts?open=1');
+    if (!res.ok) return;                                   // read-only views and signed-out pages simply show nothing
+    const d = await res.json();
+    const n = d.open || 0;
+    bar.style.display = n ? '' : 'none';
+    if (n) {
+      setText('ssai-alert-count', n === 1 ? '1 alert needs a person:' : `${n} alerts need a person:`);
+      setText('ssai-alert-text', (d.alerts && d.alerts[0] && d.alerts[0].title) || '');
+    }
+  } catch (e) { /* the next poll tries again */ }
+}
+pollAlerts();
+setInterval(pollAlerts, 30000);
 document.addEventListener('visibilitychange', () => { if (!document.hidden) pollAll(); });
 
 // ═══════════════════════════════════════════════════════════════
@@ -2301,8 +2437,8 @@ function da(fn, args, pass) {
 function toggleOpen(el) { el.classList.toggle('open'); }
 function clickElement(id) { const e = document.getElementById(id); if (e) e.click(); }
 SSAI.register({ allowlistGroup, approveRemediation, clickElement, closeIdentify, identifyThreat, rejectRemediation, setFilter,
-                setHomeFindingsFilter, setHomeTab, setMode, signOut, threatActionGroup, toggleGearMenu, toggleHomeTech,
-                toggleOpen, uploadScreenshot });
+                setHomeFindingsFilter, setHomeTab, setMode, showFindingDetails, showHelp, signOut, threatActionGroup,
+                toggleGearMenu, toggleHomeTech, toggleOpen, uploadScreenshot });
 </script>
 </body>
 </html>

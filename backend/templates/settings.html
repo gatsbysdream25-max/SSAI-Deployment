@@ -138,6 +138,40 @@
   <div class="section-title" style="margin-top:34px">Agents — what runs on this node. Cheap detectors are on; optional agents (local-LLM analyzers) are off by default and can be switched on here. Changes apply within about 30 seconds, no restart.</div>
   <div id="agent-list"></div>
 
+  <div class="section-title" style="margin-top:34px">Automatic response (optional) &mdash; a few narrow actions SwarmSentinel may take on its own, only after you switch them on. Until then, and in dry run, it only writes down what it <i>would</i> have done. Only a signed-in person can change this, undo an action or end a program.</div>
+  <style>
+    .auto-dry { border: 1px solid #b7791f; background: rgba(240,179,74,.08); border-radius: 8px; padding: 10px 12px; margin: 8px 0 12px; }
+    .auto-dry.live { border-color: #c53030; background: rgba(229,62,62,.08); }
+    .auto-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px; padding: 8px 0; border-top: 1px solid var(--border, #1e2d40); }
+    .auto-row .auto-name { flex: 1 1 260px; min-width: 0; }
+    .auto-row input[type=number] { width: 70px; }
+    .auto-on { color: #48bb78; font-weight: 700; } .auto-off { color: var(--text-muted, #7c8da3); font-weight: 700; }
+    #auto-log-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+    #auto-log-table th, #auto-log-table td { text-align: left; padding: 6px 8px; border-top: 1px solid var(--border, #1e2d40); vertical-align: top; }
+    #auto-log-table td.auto-detail { min-width: 220px; max-width: 420px; overflow-wrap: anywhere; }
+    .auto-log-wrap { overflow-x: auto; }
+    .auto-glass { border: 1px solid #c53030; background: rgba(229,62,62,.10); border-radius: 8px; padding: 10px 12px; margin: 8px 0 12px; }
+    .auto-glass.ready { border-color: var(--border, #1e2d40); background: transparent; }
+    .auto-risk { width: 100%; border-collapse: collapse; font-size: 12px; margin: 6px 0; }
+    .auto-risk th, .auto-risk td { text-align: left; padding: 4px 8px; border-top: 1px solid var(--border, #1e2d40); vertical-align: top; }
+    .auto-warn { border: 1px solid #b7791f; background: rgba(214,158,46,.10); border-radius: 8px; padding: 8px 12px; margin: 8px 0; font-size: 12px; }
+    .auto-alert { border-top: 1px solid var(--border, #1e2d40); padding: 6px 0; font-size: 12px; }
+  </style>
+  <div class="agent-card" id="auto-card">
+    <div class="agent-hdr"><div class="agent-name">Automatic response</div><div class="agent-sev" id="auto-state">Loading&hellip;</div></div>
+    <div id="auto-body"></div>
+    <div id="auto-preflight"></div>
+    <div id="auto-alerts"></div>
+  </div>
+  <div class="agent-card">
+    <div class="agent-hdr"><div class="agent-name">What it did</div>
+      <div class="agent-sev"><label>Show <select id="auto-filter" data-on-change="loadAutoLog">
+        <option value="">everything</option><option value="would-have">dry run (would have)</option><option value="done">active blocks and pauses</option>
+        <option value="failed">failed</option><option value="undone">undone</option><option value="expired">ended at time limit</option>
+        <option value="terminated">programs ended</option></select></label></div></div>
+    <div class="auto-log-wrap" id="auto-log"></div>
+  </div>
+
   <div class="section-title" style="margin-top:34px">AI models and API keys — every voice that can join the panel: switch it on or off, paste or replace its key. A model that runs out of credits or free quota rests by itself and returns when it answers again; your on/off choice is never changed for you.</div>
   <style>
     /* Four models per row on a wide screen so the whole list fits without scrolling; fewer as the screen narrows. */
@@ -532,13 +566,237 @@ async function clearUpdateToken() {
   } catch (e) { showToast('Not removed: ' + e.message, false); }
 }
 
+// ── Automatic response (auto_response.py, 2026-11-15) ──
+const AUTO_TEXT = {
+  'block-attacker-ip': ['Block an attacking address', 'after 20 or more failed sign-ins from it here in the last 48 hours (firewall on this machine)'],
+  'block-bad-ip':      ['Block a known-bad address', 'when a loaded threat feed lists it (firewall on this machine)'],
+  'block-bad-domain':  ['Block a known-bad website', 'when a loaded threat feed lists it (Pi-hole)'],
+  'freeze-process':    ['Pause a miner or reverse shell', 'a program owned by a person\'s account is paused (not killed) so you can look; never system programs'],
+};
+let autoPolicy = null;
+
+async function loadAuto() {
+  try {
+    const res = await fetch('/api/auto/settings');
+    const d = await res.json();
+    if (!res.ok) throw new Error(d.error || res.statusText);
+    autoPolicy = d.policy;
+    renderAuto(d);
+  } catch (e) {
+    document.getElementById('auto-state').textContent = 'could not load: ' + e.message;
+  }
+}
+
+function renderAuto(d) {
+  const p = d.policy;
+  document.getElementById('auto-state').innerHTML = !p.enabled ? '<span class="auto-off">OFF</span>'
+    : (p.dry_run ? '<span class="auto-on">ON</span> &middot; dry run' : '<span class="auto-on">ON</span> &middot; <b>acting for real</b>');
+  const dry = p.dry_run
+    ? `<div class="auto-dry"><b>Dry run is on.</b> Nothing is blocked or paused: each time an action would happen, a "would have" line is added to the list below so you can see what it would do on your network. Leave it like this for a while first.
+         <div style="margin-top:8px"><button class="save-btn" data-on-click="setAutoDry" data-args="[false]">Turn dry run off (act for real)</button></div></div>`
+    : `<div class="auto-dry live"><b>Dry run is off: switched-on actions really happen.</b> Each one is written to the audit log before it acts and raises an alert. A block ends after its time limit; a paused program stays paused until a person chooses Undo, End program or Keep paused below. At most ${escH(d.hourly_cap)} automatic actions an hour (now ${escH(d.actions_last_hour)}).
+         <div style="margin-top:8px"><button class="save-btn" data-on-click="setAutoDry" data-args="[true]">Back to dry run</button></div></div>`;
+  const rows = Object.keys(AUTO_TEXT).map(a => {
+    const c = p.actions[a] || { enabled: false, hours: 24 };
+    return `<div class="auto-row"><div class="auto-name"><b>${escH(AUTO_TEXT[a][0])}</b><div class="hint">${escH(AUTO_TEXT[a][1])}</div></div>
+      <label>Time limit <input type="number" min="1" max="${escH(d.max_hours)}" value="${escH(c.hours)}" data-on-change="setAutoHours" data-pass="this" data-args="${escH(JSON.stringify([a]))}"> h</label>
+      <span class="${c.enabled ? 'auto-on' : 'auto-off'}">${c.enabled ? 'ON' : 'OFF'}</span>
+      <button class="save-btn" data-on-click="toggleAutoAction" data-args="${escH(JSON.stringify([a]))}">${c.enabled ? 'Switch off' : 'Switch on'}</button></div>`;
+  }).join('');
+  const g = d.break_glass || { engaged: false };
+  const glass = g.engaged
+    ? `<div class="auto-glass"><b>Break-glass is ON: SwarmSentinel takes no automatic actions at all</b> (automatic responses and permissions to act without asking are both stopped; monitoring and alerts carry on).
+         <div class="hint">Engaged by ${escH(g.by || 'unknown')}${g.at ? ' at ' + escH(new Date(g.at).toLocaleString()) : ''}: ${escH(g.reason || '')}</div>
+         <div style="margin-top:8px"><button class="save-btn" data-on-click="releaseBreakGlass">Release (a signed-in person only)</button></div></div>`
+    : `<div class="auto-glass ready"><b>Break-glass</b> <span class="hint">One button that stops every automatic action straight away, whatever the switches below say. It also turns on by itself if the hourly cap is reached.</span>
+         <div style="margin-top:8px"><button class="save-btn" data-on-click="engageBreakGlass">Stop all automatic actions now</button></div></div>`;
+  document.getElementById('auto-body').innerHTML = `${glass}
+    <div class="auto-row"><div class="auto-name"><b>Master switch</b><div class="hint">Off means none of the actions below run, whatever their own switch says.</div></div>
+      <span class="${p.enabled ? 'auto-on' : 'auto-off'}">${p.enabled ? 'ON' : 'OFF'}</span>
+      <button class="save-btn" data-on-click="setAutoMaster" data-args="${escH(JSON.stringify([!p.enabled]))}">${p.enabled ? 'Switch everything off' : 'Switch on'}</button></div>
+    ${dry}${rows}
+    ${riskHtml(d)}
+    <div class="hint" style="margin-top:8px">Never: addresses inside your network, this machine, the never-block list, findings reported by other machines, programs that do not belong to a person's account, or programs on the never-pause list (${escH((d.never_pause || []).join(', '))}; add more with SSAI_NEVER_PAUSE). A direct check of the machine must confirm each finding at that moment.</div>`;
+}
+
+function riskHtml(d) {
+  const p = d.policy, std = p.consensus || { min_families: 2, min_confidence: 90 }, fl = d.floors || { min_families: 2, min_confidence: 80 };
+  const works = Object.values(d.alert_channels || {}).some(c => c.working);
+  const table = (d.risk_table || []).map(r => `<tr><td><b>${escH(r.severity)}</b></td><td>${escH(r.on_arrival)}</td><td>${escH(r.after_verdict)}</td></tr>`).join('');
+  return `<div class="auto-row" style="display:block"><b>What SSAI may do by severity</b>
+      <table class="auto-risk"><tr><th>Severity</th><th>When the finding arrives</th><th>After the AI panel has voted</th></tr>${table}</table>
+      <div class="hint">"Full consensus" means at least ${escH(std.min_families)} different model families voted malicious (models from the same family count once; unknown or switched-off models do not count) with confidence of at least ${escH(std.min_confidence)}, and nothing disputes it.</div>
+      <div style="margin-top:6px">Agreement standard:
+        <label>model families <input type="number" min="${escH(fl.min_families)}" max="10" value="${escH(std.min_families)}" data-on-change="setAutoStandard" data-pass="this" data-args='["min_families"]'></label>
+        <label>confidence <input type="number" min="${escH(fl.min_confidence)}" max="100" value="${escH(std.min_confidence)}" data-on-change="setAutoStandard" data-pass="this" data-args='["min_confidence"]'></label>
+        <span class="hint">(cannot be set below ${escH(fl.min_families)} families or ${escH(fl.min_confidence)} confidence)</span></div></div>
+    <div class="auto-row"><div class="auto-name"><b>Consensus-gated pause (high and critical)</b><div class="hint">Pause, never kill, a high or critical miner or reverse shell without waiting, when the agreement standard is met and a direct check confirms the program is still running. It stays paused until a person decides, and an alert is raised at once. ${works ? '' : '<b>Send and acknowledge a test alert first (below).</b>'}</div></div>
+      <span class="${p.consensus_pause ? 'auto-on' : 'auto-off'}">${p.consensus_pause ? 'ON' : 'OFF'}</span>
+      <button class="save-btn" data-on-click="toggleConsensusPause" ${!p.consensus_pause && !works ? 'disabled' : ''}>${p.consensus_pause ? 'Switch off' : 'Switch on'}</button></div>`;
+}
+function setAutoStandard(el, key) {
+  const v = Math.round(Number(el.value));
+  if (!Number.isFinite(v)) { loadAuto(); return; }
+  saveAuto(p => { p.consensus = Object.assign({}, p.consensus || {}, { [key]: v }); });   // the server applies the floors
+}
+function toggleConsensusPause() {
+  const on = !(autoPolicy && autoPolicy.consensus_pause);
+  if (on && !confirm('Switch on the consensus-gated pause? High and critical miners and reverse shells may then be PAUSED without waiting for a person, when the AI models agree.')) return;
+  saveAuto(p => { p.consensus_pause = on; });
+}
+
+async function loadPreflight() {
+  const box = document.getElementById('auto-preflight');
+  try {
+    const res = await fetch('/api/auto/preflight');
+    const d = await res.json();
+    if (!res.ok) throw new Error(d.error || res.statusText);
+    const bad = ['ufw', 'pihole'].filter(k => d[k] && !d[k].ok);
+    box.innerHTML = bad.length ? `<div class="auto-warn"><b>Blocks would not be enforced:</b> ${bad.map(k => escH(d[k].detail)).join('; ')}.</div>` : '';
+  } catch (e) {
+    box.innerHTML = '';
+  }
+}
+
+async function loadAlerts() {
+  const box = document.getElementById('auto-alerts');
+  try {
+    const res = await fetch('/api/auto/alerts');
+    const d = await res.json();
+    if (!res.ok) throw new Error(d.error || res.statusText);
+    const ch = d.channels || {};
+    const chText = Object.entries(ch).map(([k, c]) => `${escH(k)}: ${c.working ? 'working (confirmed by ' + escH(c.confirmed_by || '') + ')' : 'not tested yet'}`).join('; ');
+    const rows = (d.alerts || []).slice(0, 20).map(a => `<div class="auto-alert"><b>${escH(a.title)}</b> <span class="hint">${escH(a.at ? new Date(a.at).toLocaleString() : '')}</span>
+        <div class="hint">${escH(a.detail || '')}</div>
+        ${a.acknowledged_by ? `<div class="hint">acknowledged by ${escH(a.acknowledged_by)}</div>` : `<button class="save-btn" data-on-click="ackAlert" data-args="${escH(JSON.stringify([a.id]))}">Acknowledge</button>`}</div>`).join('');
+    box.innerHTML = `<div class="auto-row" style="display:block"><b>Alerts</b> <span class="hint">(${escH(d.open || 0)} open) Channels: ${chText}</span>
+        <div style="margin-top:6px"><button class="save-btn" data-on-click="sendTestAlert">Send a test alert</button>
+        <span class="hint">Then acknowledge it here to confirm the channel works.</span></div>${rows || '<div class="hint">No alerts yet.</div>'}</div>`;
+  } catch (e) {
+    box.innerHTML = '<div class="hint">Could not load alerts: ' + escH(e.message) + '</div>';
+  }
+}
+async function alertCall(url) {
+  try {
+    const res = await fetch(url, { method: 'POST', headers: { 'X-CSRF-Token': CSRF_TOKEN } });
+    const data = await res.json();
+    if (!res.ok || data.ok === false) throw new Error(data.error || res.statusText);
+    showToast('Done', true);
+  } catch (e) {
+    showToast('Not done: ' + e.message, false);
+  }
+  loadAlerts();
+  loadAuto();
+}
+function sendTestAlert() { alertCall('/api/auto/alerts/test'); }
+function ackAlert(id) { alertCall('/api/auto/alerts/' + encodeURIComponent(id) + '/ack'); }
+
+async function saveAuto(change) {
+  if (!autoPolicy) return;
+  const next = JSON.parse(JSON.stringify(autoPolicy));
+  change(next);
+  try {
+    const res = await fetch('/api/auto/settings', {
+      method: 'POST', headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': CSRF_TOKEN }, body: JSON.stringify(next),
+    });
+    const data = await res.json();
+    if (!res.ok || data.ok === false) throw new Error(data.error || res.statusText);
+    showToast('Automatic response saved', true);
+  } catch (e) {
+    showToast('Not saved: ' + e.message, false);
+  }
+  loadAuto();
+}
+
+function setAutoMaster(on) {
+  if (on && !autoPolicy.dry_run && !confirm('Dry run is off. Switching on means the actions you switched on will really block and pause things. Continue?')) return;
+  saveAuto(p => { p.enabled = on; });
+}
+function setAutoDry(on) {
+  if (!on && !confirm('Turn dry run off? Switched-on actions will then really block addresses and pause programs on their own.')) return;
+  saveAuto(p => { p.dry_run = on; });                      // the server only accepts the value false to turn dry run off
+}
+async function breakGlassCall(what, body) {
+  try {
+    const res = await fetch('/api/auto/break-glass/' + what, {
+      method: 'POST', headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': CSRF_TOKEN }, body: JSON.stringify(body || {}),
+    });
+    const data = await res.json();
+    if (!res.ok || data.ok === false) throw new Error(data.error || res.statusText);
+    showToast(what === 'engage' ? 'Break-glass on: all automatic actions stopped' : 'Break-glass released', true);
+  } catch (e) {
+    showToast('Not done: ' + e.message, false);
+  }
+  loadAuto();
+}
+function engageBreakGlass() {
+  const reason = prompt('Stop every automatic action now? Optionally say why (kept in the audit log):', '');
+  if (reason === null) return;
+  breakGlassCall('engage', { reason });
+}
+function releaseBreakGlass() {
+  if (!confirm('Release break-glass? Automatic actions that are switched on below may run again.')) return;
+  breakGlassCall('release');
+}
+function toggleAutoAction(name) { saveAuto(p => { p.actions[name].enabled = !p.actions[name].enabled; }); }
+function setAutoHours(el, name) {
+  const h = Math.round(Number(el.value));
+  if (!(h >= 1 && h <= 168)) { showToast('The time limit is 1 to 168 hours', false); loadAuto(); return; }
+  saveAuto(p => { p.actions[name].hours = h; });
+}
+
+async function loadAutoLog() {
+  const status = document.getElementById('auto-filter').value;
+  const box = document.getElementById('auto-log');
+  try {
+    const res = await fetch('/api/auto/actions?limit=200' + (status ? '&status=' + encodeURIComponent(status) : ''));
+    const rows = await res.json();
+    if (!res.ok) throw new Error(rows.error || res.statusText);
+    if (!rows.length) { box.innerHTML = '<div class="hint">Nothing yet.</div>'; return; }
+    box.innerHTML = `<table id="auto-log-table"><tr><th>When</th><th>Action</th><th>Target</th><th>State</th><th>Ends</th><th>Details</th><th></th></tr>${rows.map(r => `
+      <tr><td>${escH(r.created_at ? new Date(r.created_at).toLocaleString() : '')}</td><td>${escH((AUTO_TEXT[r.action] || [r.action])[0])}</td>
+        <td>${escH(r.kind === 'process' ? 'process ' + r.target : r.target)}</td><td>${escH(r.status)}${r.dry_run ? ' (dry run)' : ''}</td>
+        <td>${escH(r.status === 'done' && r.expires_at ? new Date(r.expires_at).toLocaleString() : (r.status === 'done' && r.kind === 'process' ? 'when a person decides' : (r.ended_by ? 'ended by ' + r.ended_by : '')))}</td>
+        <td class="auto-detail">${escH(r.detail || '')}</td>
+        <td>${r.status === 'done' ? `<button class="save-btn" data-on-click="autoUndo" data-args="${escH(JSON.stringify([r.id]))}">Undo</button>` : ''}
+            ${r.status === 'done' && r.kind === 'process' ? `<button class="save-btn" data-on-click="autoTerminate" data-args="${escH(JSON.stringify([r.id]))}">End program</button>
+              <button class="save-btn" data-on-click="autoKeep" data-args="${escH(JSON.stringify([r.id]))}">Keep paused</button>` : ''}</td></tr>`).join('')}</table>`;
+  } catch (e) {
+    box.innerHTML = '<div class="hint">Could not load the list: ' + escH(e.message) + '</div>';
+  }
+}
+
+async function autoEnd(id, what, confirmText) {
+  if (!confirm(confirmText)) return;
+  try {
+    const res = await fetch(`/api/auto/actions/${Number(id)}/${what}`, { method: 'POST', headers: { 'X-CSRF-Token': CSRF_TOKEN } });
+    const data = await res.json();
+    if (!res.ok || data.ok === false) throw new Error(data.error || res.statusText);
+    showToast(what === 'undo' ? 'Undone' : (what === 'keep' ? 'Kept paused (recorded)' : 'Program ended'), true);
+  } catch (e) {
+    showToast('Not done: ' + e.message, false);
+  }
+  loadAutoLog();
+  loadAuto();
+}
+function autoUndo(id) { autoEnd(id, 'undo', 'Undo this automatic action now (unblock, or let the paused program run again)?'); }
+function autoTerminate(id) { autoEnd(id, 'terminate', 'End this paused program for good? It is checked to be the same program first.'); }
+function autoKeep(id) { autoEnd(id, 'keep', 'Leave this program paused? Your decision is recorded; it stays paused until someone chooses otherwise.'); }
+
 loadCapability();
 loadUpdate();
 loadMicrosoft();
 loadUpdateToken();
 loadAgents();
 loadModels();
-SSAI.register({ addMachine, changePassword, clearMicrosoft, clearUpdateToken, deleteNode, recheckModel, revokeNode, saveMicrosoft, saveModelKey, saveRouting, saveUpdateToken, signOut, toggleAgent, toggleModel });
+loadAuto();
+loadAutoLog();
+loadPreflight();
+loadAlerts();
+SSAI.register({ ackAlert, addMachine, autoKeep, autoTerminate, autoUndo, changePassword, clearMicrosoft, clearUpdateToken, deleteNode, engageBreakGlass,
+                loadAutoLog, recheckModel, releaseBreakGlass,
+                revokeNode, saveMicrosoft, saveModelKey, saveRouting, saveUpdateToken, sendTestAlert, setAutoDry, setAutoHours,
+                setAutoMaster, setAutoStandard, signOut, toggleAgent, toggleAutoAction, toggleConsensusPause, toggleModel });
 loadNodes();
 </script>
 

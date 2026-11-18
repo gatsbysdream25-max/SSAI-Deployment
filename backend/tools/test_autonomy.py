@@ -50,9 +50,14 @@ class FakePiHole:
         pass
 
 
+# Week 2: a medium finding needs two independent model FAMILIES, judged from the hub's registry (patched in Base.setUp).
+VOTERS = {'a': ('llama3', True), 'b': ('mistral', True), 'c': ('gemma4:12b', True), 'd': ('phi4:14b', True)}
+
+
 def verdict(**kw):
     base = {'consensus_verdict': 'malicious', 'consensus_severity': 'MEDIUM', 'confidence': 95, 'ai_count': 4,
             'ai_sources': ['a', 'b', 'c', 'd'], 'quorum': {'degraded': False}, 'panel_mode': 'primary',
+            'positions': [{'ai': n, 'verdict': 'malicious'} for n in 'abcd'],
             'evidence': {'status': 'verified', 'conflict': False}, 'verification': {'status': 'confirmed'}}
     base.update(kw)
     return base
@@ -69,6 +74,16 @@ class Base(unittest.TestCase):
         patch = mock.patch.object(remediation, 'block', lambda target, threat_id, **kw: self.pihole.deny(target['value'], 'x') or 'blocked')
         patch.start()
         self.addCleanup(patch.stop)
+        # The hub's own direct check of the machine (2026-11-15). Most tests are about other limits, so it confirms by default;
+        # the DirectCheck tests cover the refusals. Never touches the real machine.
+        self.direct = {'result': 'confirmed', 'check': 'threat-feed', 'detail': 'listed (test)', 'at': 'now'}
+        dpatch = mock.patch('agents.live_checks.check', side_effect=lambda facts, **kw: dict(self.direct))
+        dpatch.start()
+        self.addCleanup(dpatch.stop)
+        import action_risk
+        vpatch = mock.patch.object(action_risk, '_hub_voters', lambda: dict(VOTERS))
+        vpatch.start()
+        self.addCleanup(vpatch.stop)
 
     def tearDown(self):
         db.session.remove()
@@ -123,6 +138,8 @@ class Acting(Base):
             'low confidence': verdict(confidence=85),
             'too few models': verdict(ai_count=2),
             'severity not covered': verdict(consensus_severity='HIGH'),
+            'one model family only': verdict(positions=[{'ai': 'a', 'verdict': 'malicious'}, {'ai': 'b', 'verdict': 'benign'},
+                                                         {'ai': 'c', 'verdict': 'benign'}, {'ai': 'd', 'verdict': 'benign'}]),
         }
         for name, c in cases.items():
             row = RQ.propose(self.threat(url=f'http://{name.replace(" ", "-")}.example.com/'), c)
@@ -187,6 +204,23 @@ class Acting(Base):
         row = RQ.propose(t, verdict(evidence={'status': 'unverified'}))             # the verdict's own claim is ignored; the hub's data decides
         self.assertEqual(row.status, 'approved')
 
+    def test_a_direct_check_that_does_not_confirm_means_no_automatic_action(self):
+        self.grant()
+        for result in ('not-confirmed', 'inconclusive'):
+            self.direct = {'result': result, 'check': 'threat-feed', 'detail': 'gone (test)', 'at': 'now'}
+            row = RQ.propose(self.threat(url=f'http://{result}.example.com/'), verdict())
+            self.assertIsNone(row, result)          # medium + no usable grant: not proposed, exactly as with no grant at all
+        self.assertEqual(self.pihole.denied, [])
+        why = autonomy.matching_grant(self.threat(url='http://x.example.com/'), verdict(), {'kind': 'domain', 'value': 'x.example.com'})[1]
+        self.assertIn('direct check could not confirm', why)
+
+    def test_a_direct_check_claimed_in_the_request_is_not_believed(self):
+        self.grant()
+        self.direct = {'result': 'not-confirmed', 'check': 'process', 'detail': 'gone', 'at': 'now'}
+        forged = verdict(evidence={'status': 'verified', 'conflict': False, 'direct': {'result': 'confirmed'}})
+        self.assertIsNone(RQ.propose(self.threat(), forged))
+        self.assertEqual(self.pihole.denied, [])
+
     def test_a_broken_autonomy_check_means_ask_a_person(self):
         with mock.patch('models.AutonomyGrant.query', side_effect=RuntimeError('db')):
             self.assertEqual(autonomy.matching_grant(self.threat(), verdict(), {'kind': 'domain', 'value': 'x.example.com'})[0], None)
@@ -197,17 +231,21 @@ class Creating(unittest.TestCase):
         bad = {'wildcard': dict(GOOD, category='*'), 'no category': dict(GOOD, category=''), 'odd action': dict(GOOD, action='format-disk'),
                'low confidence': dict(GOOD, min_confidence=60), 'two models': dict(GOOD, min_ai_count=2),
                'too fast': dict(GOOD, rate_limit_per_hour=500), 'forever': dict(GOOD, days=3650), 'never undone': dict(GOOD, ttl_hours=0),
-               'not numbers': dict(GOOD, min_confidence='high'), 'severe without the sentence': dict(GOOD, severities=['high']),
-               'severe half-confirmed': dict(GOOD, severities=['critical'], allow_severe=True)}
+               'not numbers': dict(GOOD, min_confidence='high'), 'high': dict(GOOD, severities=['high']),
+               'critical with the old flag': dict(GOOD, severities=['critical'], allow_severe=True)}
         for name, data in bad.items():
             fields, problem = autonomy.validate_new(data)
             self.assertIsNone(fields, name)
             self.assertTrue(problem, name)
 
-    def test_severe_findings_need_the_typed_sentence_and_the_flag(self):
-        fields, problem = autonomy.validate_new(dict(GOOD, severities=['high'], allow_severe=True, confirmation=autonomy.SEVERE_CONFIRMATION))
-        self.assertEqual(problem, '')
-        self.assertIn('high', fields['severities'])
+    def test_high_and_critical_can_never_be_granted_even_with_the_old_flag_and_sentence(self):
+        # Week 2: allow_severe was removed. The old sentence is spelled out here so a revert is caught.
+        old = 'I understand severe findings will be acted on without a person'
+        for sev in ('high', 'critical'):
+            fields, problem = autonomy.validate_new(dict(GOOD, severities=[sev], allow_severe=True, confirmation=old))
+            self.assertIsNone(fields, sev)
+            self.assertIn('always need a person', problem)
+        self.assertFalse(hasattr(autonomy, 'SEVERE_CONFIRMATION'))
 
     def test_an_infinite_number_is_a_clear_refusal_not_a_crash(self):
         fields, problem = autonomy.validate_new(dict(GOOD, days=float('inf'), min_confidence=float('inf')))

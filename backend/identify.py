@@ -283,6 +283,70 @@ def merge_device(pihole, arp, oui=oui_vendor):
     return dev if (dev.get('mac') or pihole) else {}
 
 
+# ── a short device name for the dashboard (2026-11-15) ──────────────────────
+
+_label_cache = _TtlCache(ttl=600, max_entries=2048)           # 10 minutes: names change rarely, lookups cost a round trip
+
+
+def device_label(ip, deps):
+    """A short name for the device at `ip`, for the IOC / Origin column: {'name': str or None, 'how': where it came from}.
+
+    Tried in order, first answer wins: the Pi-hole's name for it, reverse DNS, then the network card's maker (from its MAC).
+    `deps` has pihole(ip) -> Pi-hole device record or None, rdns(ip) -> name or None, arp(ip) -> {'mac'} or None and
+    vendor(mac) -> maker or None; any of them may raise, which just means "no answer from that source". Never raises, and
+    never returns the address itself."""
+    try:
+        addr = ipaddress.ip_address(str(ip))
+    except ValueError:
+        return {'name': None, 'how': None}
+    if addr.is_loopback:
+        return {'name': None, 'how': 'this-machine'}          # the caller names the machine that reported it
+    cached = _label_cache.get(str(addr))
+    if cached is not None:
+        return cached
+
+    def ask(fn, *args):
+        try:
+            return fn(*args) if fn else None
+        except Exception:                                      # noqa: BLE001 -- one source failing is not an error
+            return None
+    out = {'name': None, 'how': None}
+    lan = scope_of(addr) == 'lan'
+    dev = ask(getattr(deps, 'pihole', None), str(addr)) if lan else None
+    names = [n for n in (dev or {}).get('names') or [] if n and n != str(addr)]
+    if names:
+        out = {'name': clean(names[0], 60), 'how': 'pi-hole'}
+    else:
+        rdns = ask(getattr(deps, 'rdns', None), str(addr))
+        if rdns and rdns != str(addr):
+            out = {'name': clean(rdns, 60), 'how': 'reverse-dns'}
+        elif lan:
+            mac = (dev or {}).get('mac') or (ask(getattr(deps, 'arp', None), str(addr)) or {}).get('mac')
+            vendor = (dev or {}).get('vendor') or (ask(getattr(deps, 'vendor', None), mac) if mac and not mac_flags(mac)['randomized'] else None)
+            if vendor:
+                out = {'name': clean(f'{vendor} device', 60), 'how': 'vendor'}
+            elif mac and mac_flags(mac)['randomized']:
+                out = {'name': 'phone or laptop (private MAC)', 'how': 'vendor'}
+    _label_cache.put(str(addr), out)
+    return out
+
+
+def _arp_only(ip, run=subprocess.run):
+    """The neighbour table's MAC for `ip`, without the wake-up ping read_arp() sends: a name label never touches a device."""
+    try:
+        r = run(['ip', 'neigh', 'show', ip], capture_output=True, text=True, timeout=5)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    m = re.search(r'lladdr ([0-9a-f:]{17})', r.stdout or '', re.I)
+    return {'mac': m.group(1).lower()} if m else None
+
+
+def label_deps(pihole=None):
+    """The real sources for device_label(): Pi-hole (when configured), reverse DNS, the ARP table and the IEEE vendor list."""
+    return SimpleNamespace(pihole=(lambda ip: pihole_device(ip, pihole)) if pihole is not None else None,
+                           rdns=reverse_dns, arp=_arp_only, vendor=oui_vendor)
+
+
 # ── assembling the answer ────────────────────────────────────────────────────
 
 class Deps(SimpleNamespace):

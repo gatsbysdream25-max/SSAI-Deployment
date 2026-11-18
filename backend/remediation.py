@@ -27,7 +27,7 @@ import requests
 from agents import intel
 
 UFW = '/usr/sbin/ufw'
-_MASKED = re.compile(r'(\d\.x{2,}|x{2,}\.\d|x{2,}\.x{2,})', re.I)
+_MASKED = re.compile(r'(\d\.x{2,}|x{2,}\.\d|x{2,}\.x{2,}|:x{4}(?::|\b))', re.I)   # 192.168.xxx.xxx, fd12:3456:xxxx::
 _WEB_SCHEMES = ('http', 'https', 'ftp')
 
 
@@ -57,9 +57,11 @@ def classify_target(raw):
             raise TargetError(f'"{parts.scheme}://" addresses are internal monitors, not something that can be blocked')
     else:
         host = re.split(r'[/?#]', s, 1)[0]
-        if host.count(':') == 1:                                   # host:port (a bare IPv6 literal has several colons)
+        if host.startswith('[') and ']' in host:                    # [2001:db8::5]:4444 (IPv6 with a port)
+            host = host[1:host.index(']')]
+        elif host.count(':') == 1:                                 # host:port (a bare IPv6 literal has several colons)
             host = host.split(':')[0]
-        host = host.strip('[]')
+        host = host.strip('[]').split('%', 1)[0]
     host = host.strip().lower().rstrip('.')
     if not host:
         raise TargetError('no host found in this address')
@@ -116,17 +118,40 @@ def firewall_block(ip, run=subprocess.run):
         raise RemediationError(f'ufw is not usable: {message[:200]}')
     if 'status: active' not in st.stdout.lower():
         raise RemediationError('the firewall (ufw) is switched off on this host, so a rule would not be enforced; enable it first')
+    v6 = ':' in ip
     done = []
     for rule in (['deny', 'from', ip], ['deny', 'out', 'to', ip]):
-        r = _ufw(['insert', '1'] + rule, run)
-        if r.returncode != 0 and 'invalid position' in (r.stderr + r.stdout).lower():
-            r = _ufw(rule, run)                                    # empty rule set: nothing to insert above
+        if v6:
+            # ufw keeps IPv4 and IPv6 rules in two lists and will not insert an IPv6 rule at an IPv4 rule's number
+            # ("Invalid position"). Appending would put the deny BELOW the IPv6 allow rules (allow 22 ...), where it does
+            # nothing for those ports. So insert above the first IPv6 rule; append only when there is no IPv6 rule yet.
+            pos = _first_v6_rule(run)
+            r = _ufw(['insert', pos] + rule, run) if pos else _ufw(rule, run)
+        else:
+            r = _ufw(['insert', '1'] + rule, run)
+            if r.returncode != 0 and 'invalid position' in (r.stderr + r.stdout).lower():
+                r = _ufw(rule, run)                                # empty rule set: nothing to insert above
         if r.returncode != 0:
             for undo in done:                                      # never leave half a block behind
                 _ufw(['delete'] + undo, run)
-            raise RemediationError(f'ufw refused the rule: {(r.stderr or r.stdout).strip()[:200]}')
+            message = (r.stderr or r.stdout).strip()[:200]
+            if v6 and 'ipv6' in message.lower():
+                message += ' (IPv6 may be switched off in ufw: IPV6=yes in /etc/default/ufw, then sudo ufw reload)'
+            raise RemediationError(f'ufw refused the rule: {message}')
         done.append(rule)
     return 'this host only: inbound and outbound traffic with %s is denied' % ip
+
+
+def _first_v6_rule(run):
+    """The number of the first IPv6 rule in `ufw status numbered` ("[ 7] 22/tcp (v6)  ALLOW IN  Anywhere (v6)"), or None."""
+    r = _ufw(['status', 'numbered'], run)
+    if r.returncode != 0:
+        raise RemediationError(f'ufw could not list its rules: {(r.stderr or r.stdout).strip()[:200]}')
+    for line in (r.stdout or '').splitlines():
+        m = re.match(r'\s*\[\s*(\d+)\]\s.*\(v6\)', line)
+        if m:
+            return m.group(1)
+    return None
 
 
 def firewall_unblock(ip, run=subprocess.run):

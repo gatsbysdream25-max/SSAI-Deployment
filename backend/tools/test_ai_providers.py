@@ -128,6 +128,29 @@ class ProviderRequests(unittest.TestCase):
         call, _ = self.run_provider(self.ollama(json_mode=False), {'response': '{}'})
         self.assertNotIn('format', call['json'])
 
+    def test_ollama_unloads_the_model_right_after_answering(self):
+        # 2026-11-15: local models stay in RAM only while they answer (keep_alive 0) unless the operator says otherwise
+        os.environ.pop('SSAI_OLLAMA_KEEP_ALIVE', None)
+        call, _ = self.run_provider(self.ollama(), {'response': '{}'})
+        self.assertEqual(call['json']['keep_alive'], 0)
+        for given, sent in (('300', 300), ('5m', '5m'), ('-1', -1), ('', 0)):
+            os.environ['SSAI_OLLAMA_KEEP_ALIVE'] = given
+            call, _ = self.run_provider(self.ollama(), {'response': '{}'})
+            self.assertEqual(call['json']['keep_alive'], sent, given)
+
+    def test_screenshot_reader_unloads_the_model_too(self):
+        import screenshot_ai
+        os.environ.pop('SSAI_OLLAMA_KEEP_ALIVE', None)
+        cap = Capture({'response': '{"verdict": "benign"}'})
+        orig = screenshot_ai.vision_model
+        screenshot_ai.vision_model = lambda: ('ollama-test', 'http://h:11434', 'm', '')
+        swarm.requests.post = cap
+        try:
+            screenshot_ai.analyze_screenshot_image(b'\x89PNG fake')
+        finally:
+            screenshot_ai.vision_model = orig
+        self.assertEqual(cap.calls[0]['json']['keep_alive'], 0)
+
     def test_anthropic_request_unchanged(self):
         os.environ['ANTHROPIC_API_KEY'] = 'k'
         call, out = self.run_provider(swarm._AnthropicProvider(), ANTHROPIC_REPLY)

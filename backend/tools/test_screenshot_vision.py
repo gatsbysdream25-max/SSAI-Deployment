@@ -160,10 +160,10 @@ class Route(unittest.TestCase):
         self.assertEqual(body['threat']['url'], 'https://phish.example/login')
         self.assertEqual(body['threat']['detected_by'], 'screenshot-upload:ollama-gemma4')
 
-    def test_a_nonsense_severity_falls_back_to_low(self):
+    def test_a_nonsense_severity_falls_back_to_medium(self):   # Week 2: not low, which acts on arrival
         with mock.patch('routes.threats.analyze_screenshot_image', return_value=dict(DRAFT, severity='apocalyptic', source='gemini')):
             r = self.post(self.upload())
-        self.assertEqual(r.get_json()['threat']['severity'], 'low')
+        self.assertEqual(r.get_json()['threat']['severity'], 'medium')
 
     def test_no_provider_answering_is_a_503_that_says_what_to_do(self):
         with mock.patch('routes.threats.analyze_screenshot_image', return_value=None):

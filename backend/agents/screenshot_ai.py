@@ -90,7 +90,7 @@ def analyze_screenshot_image(image_bytes: bytes, mime_type: str = "image/png"):
         r = requests.post(
             f"{endpoint}/api/generate",
             json={"model": model, "prompt": _VISION_PROMPT, "images": [base64.b64encode(image_bytes).decode()],
-                  "stream": False, "format": "json"},
+                  "stream": False, "format": "json", "keep_alive": model_config.ollama_keep_alive()},   # unload right after
             timeout=_TIMEOUT_LOCAL,
         )
         r.raise_for_status()

@@ -38,11 +38,11 @@ def _as_text(v):
 
 def _threat_from_data(data):
     """Build an unsaved Threat from submitted JSON. Values are made safe for the database, an unknown severity becomes
-    'low', and the admin-only real address is kept from `real_url`."""
+    'medium' (it then waits for the AI vote; Week 2), and the admin-only real address is kept from `real_url`."""
     raw_sev = data.get('severity', 'medium')
     severity = normalize_severity(raw_sev)
     if severity not in _VALID_SEVERITIES:
-        severity = 'low'
+        severity = 'medium'        # Week 2: not low, the only severity acted on when a finding arrives
     return Threat(
         url         = _as_text(data.get('url')),
         type        = _as_text(data.get('type')),
@@ -263,12 +263,27 @@ def submit_threat():
     if existing:
         reply = _record_repeat(existing, threat, now)
         if reply is not None:
+            if existing.status == 'active':
+                _automatic_response(existing, who, description=threat.description)   # the newest wording (a new process id ...)
             return reply
 
     findings.start(threat, now)
     db.session.add(threat)
     db.session.commit()
+    _automatic_response(threat, who)
     return jsonify({'success': True, 'threat': threat.to_dict()}), 201
+
+
+def _automatic_response(row, who, description=None):
+    """Offer a stored or repeated finding to the opt-in automatic response (auto_response.py). Off by default, when it costs one
+    small file read. Whatever happens there, the finding is already saved and the reply is unchanged."""
+    try:
+        import auto_response
+        from app import _AUDIT_PATH
+        auto_response.on_finding(row, who.kind, _AUDIT_PATH, description=description)
+    except Exception as e:                     # noqa: BLE001 -- never break ingest
+        import logging
+        logging.getLogger(__name__).warning('automatic response hook failed for threat %s: %s', getattr(row, 'id', '?'), e)
 
 
 @threats_bp.route('/<int:id>/reopen', methods=['POST'])
@@ -326,6 +341,14 @@ def update_threat(id):
         except Exception as e:                 # noqa: BLE001 -- a proposal failing must never break the verdict save
             import logging
             logging.getLogger(__name__).warning('remediation_queue.propose failed for threat %s: %s', id, e)
+        # Week 2: a second look by the automatic responses, now that the panel has voted (action_risk.py decides by severity).
+        try:
+            import auto_response
+            from app import _AUDIT_PATH
+            auto_response.on_verdict(threat, consensus, _AUDIT_PATH)          # never raises
+        except Exception as e:                 # noqa: BLE001 -- the import itself must not break the verdict save either
+            import logging
+            logging.getLogger(__name__).warning("automatic response after the verdict failed for threat %s: %s", id, e)
     return jsonify(threat.to_dict())
 
 
@@ -368,7 +391,7 @@ def submit_threat_from_screenshot():
 
     severity = normalize_severity(verdict.get('severity', 'medium'))
     if severity not in _VALID_SEVERITIES:
-        severity = 'low'
+        severity = 'medium'
 
     # One model's reading of one picture is a draft, not a finding (audit F-16): it is capped at medium so the whole panel, not this
     # model, decides whether it is high or critical, and the description says where it came from.

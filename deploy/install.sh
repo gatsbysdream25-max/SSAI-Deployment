@@ -375,6 +375,7 @@ if [ "$ROLE" = hub ]; then
   echo "   Add a machine:  here, run deploy/new-node.sh (or Settings -> Machines) for a one-time code; then on the machine:"
   echo "                   sudo deploy/install.sh --role node --hub-url http://${ip:-HUB}:$PORT --enroll-code CODE"
   command -v ufw >/dev/null && echo "   Firewall:    if ufw is active, allow your LAN to reach the dashboard: sudo ufw allow from <your-lan>/24 to any port $PORT"
+  command -v ufw >/dev/null && echo "                (IPv6 LAN too: sudo ufw allow from fe80::/10 to any port $PORT, and your fd00::/8 range if you use one)"
 else
   echo "   This machine reports to $HUB_URL as '${NODE_ID:-$(hostname)}'. Look for it on the hub's dashboard."
 fi

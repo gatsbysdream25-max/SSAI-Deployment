@@ -25,6 +25,8 @@ import os
 import re
 import socket
 import csv
+import hashlib
+import ipaddress
 import json
 import sys
 from collections import deque, OrderedDict
@@ -41,6 +43,9 @@ import recall
 import finding_flow
 import injection_guard
 import local_evidence
+import change_evidence
+import live_checks
+import model_config
 import intel
 import redact
 import state_store
@@ -56,7 +61,11 @@ except ImportError:
 def _detect_local_subnet():
     """Best-effort /24 guess from this host's own outbound-facing IP (same
     UDP-connect trick used in app.py's _never_block_ips() — no packet is
-    actually sent, just forces the OS to pick a local interface)."""
+    actually sent, just forces the OS to pick a local interface).
+
+    IPv4 on purpose (2026-11-18): an IPv6 home network is one /64, 18 billion billion addresses, which no scan can cover.
+    IPv6 devices are still seen where they show up: SSH and firewall logs, outbound connections, the Pi-hole and the
+    neighbour table (`ip neigh` lists IPv6 neighbours too)."""
     try:
         with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
             s.connect(('10.255.255.255', 1))
@@ -211,7 +220,35 @@ def heartbeat(name, status='active', scan_count=None, threat_count=None, last_sc
 
 
 from agent_util import (_BoundedDict, _BoundedSet, _IFACE_RE, _MAC_RE, _PRIV_NETS, _SYSLOG_HOST_RE, _is_private_ip,   # noqa: F401
-                        mask_private_ip, sanitize_log_line)
+                        find_ip, find_ip_port, mask_private_ip, sanitize_log_line, split_host_port, ssh_source)
+
+
+def _span(seconds):
+    """A time window in words: 600 -> '10 min', 3600 -> '1 hour', 21600 -> '6 hours'."""
+    if seconds < 3600:
+        return f'{seconds // 60} min'
+    hours = seconds // 3600
+    return '1 hour' if hours == 1 else f'{hours} hours'
+
+
+def _is_loopback_bind(addr):
+    """Is an `ss` local address (127.0.0.53%lo, [::1], *, 0.0.0.0, 192.0.2.5) reachable from this machine only?"""
+    host = addr.strip('[]').split('%', 1)[0]
+    if host.startswith('::ffff:'):
+        host = host[7:]
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False                           # '*' and anything unreadable count as reachable: report rather than miss
+
+
+def _cmdline_of(pid):
+    """A process's command line from /proc, or '' when it cannot be read."""
+    try:
+        with open(f'/proc/{pid}/cmdline', 'rb') as f:
+            return f.read().replace(b'\0', b' ').decode('utf-8', 'replace').strip()
+    except OSError:
+        return ''
 
 # FIX (2026-08-19): allowlist for known-normal ports (e.g. a smart TV's local
 # Google Cast API), scoped to (threat_type, port) rather than a specific
@@ -516,43 +553,117 @@ class AuthLogAgent(BaseAgent):
     interval = 30
 
     # Distributed ("low-and-slow") brute force: many addresses, each staying under the per-address threshold of 5.
-    # Found by the sandbox drills on 2026-10-10 (24 failures from 6 addresses went unseen). One finding when the whole
-    # host sees SPREAD_MIN_FAILS failures from SPREAD_MIN_IPS or more addresses within SPREAD_WINDOW seconds; at most
-    # one per SPREAD_COOLDOWN, under one stable identity, so an internet-facing SSH port gives one row with sightings.
-    SPREAD_WINDOW = 600
-    SPREAD_MIN_FAILS = 20
-    SPREAD_MIN_IPS = 5
+    # Found by the sandbox drills on 2026-10-10 (24 failures from 6 addresses went unseen); widened 2026-11-15 to slower
+    # campaigns. Each rule is (window in seconds, failures, different addresses): the whole host crossing ANY rule raises
+    # one finding. ACCOUNT_RULE catches many addresses guessing ONE account. All rules share one cooldown, so an
+    # internet-facing SSH port gives one row with sightings, not a flood.
+    SPREAD_RULES = ((600, 20, 5), (3600, 12, 4), (86400, 30, 5))
+    ACCOUNT_RULE = (6 * 3600, 10, 3)
     SPREAD_COOLDOWN = 3600
+    SPREAD_KEEP = 50000                    # most failures remembered for the 24-hour rule
+    # kept for older callers and tests: the first (fastest) rule
+    SPREAD_WINDOW, SPREAD_MIN_FAILS, SPREAD_MIN_IPS = SPREAD_RULES[0]
+
+    # Per-address counts forget failures older than FAIL_MEMORY, so an address that tried 4 times last month does not
+    # trip the alarm with one typo today. At most FAIL_KEEP timestamps per address.
+    FAIL_MEMORY = 48 * 3600
+    FAIL_KEEP = 60
+    SUCCESS_AFTER = 5                      # a login after this many failures from the same address is a critical finding
+
+    _FAILED_USER = re.compile(r'(?:Failed \S+ for (?:invalid user )?|Invalid user )(\S*) from')
 
     def setup(self):
         self._seen = _BoundedSet(10000)
-        self._fail_counts = _BoundedDict(10000)
-        self._recent_fails = deque()
+        self._fail_times = _BoundedDict(10000)
+        self._bf_success = _BoundedSet(10000)
+        self._recent_fails = deque(maxlen=self.SPREAD_KEEP)
         self._last_spread_alert = float('-inf')
         _resume_offset(self, '/var/log/auth.log')
 
-    def _note_spread(self, ip, now=None):
+    def _note_failure(self, ip, now=None):
+        """Remember one failed login from `ip` and return how many it has made in the last FAIL_MEMORY seconds."""
+        now = time.time() if now is None else now
+        times = self._fail_times.get(ip)
+        if times is None:
+            times = deque(maxlen=self.FAIL_KEEP)
+            self._fail_times[ip] = times
+        while times and now - times[0] > self.FAIL_MEMORY:
+            times.popleft()
+        times.append(now)
+        return len(times)
+
+    def _recent_failures(self, ip, now=None):
+        now = time.time() if now is None else now
+        return sum(1 for t in self._fail_times.get(ip) or () if now - t <= self.FAIL_MEMORY)
+
+    def _note_spread(self, ip, now=None, user=None):
         """Record one failed login and raise a single 'distributed brute force' finding when many different addresses
-        together cross the thresholds in a short window (attackers spread attempts out to stay under the per-
-        address limit)."""
+        together cross one of SPREAD_RULES, or guess one account (ACCOUNT_RULE). Attackers spread attempts out to stay
+        under the per-address limit."""
         now = time.time() if now is None else now
         recent = self._recent_fails
-        recent.append((now, ip))
-        while recent and now - recent[0][0] > self.SPREAD_WINDOW:
+        recent.append((now, ip, user))
+        longest = max(w for w, _, _ in self.SPREAD_RULES + (self.ACCOUNT_RULE,))
+        while recent and now - recent[0][0] > longest:
             recent.popleft()
-        if len(recent) < self.SPREAD_MIN_FAILS or now - self._last_spread_alert < self.SPREAD_COOLDOWN:
+        if now - self._last_spread_alert < self.SPREAD_COOLDOWN:
             return
-        ips = {i for _, i in recent}
-        if len(ips) < self.SPREAD_MIN_IPS:
+        found = self._spread_match(now, user)
+        if found is None:
             return
         self._last_spread_alert = now
+        count, ips, window, who = found
         self._submit(
             url='ssh://distributed',
             threat_type='distributed-brute-force',
             severity='high',
-            description=(f'Distributed SSH brute force: {len(recent)} failed logins from {len(ips)} addresses in '
-                         f'{self.SPREAD_WINDOW // 60} min, each below the per-address alarm (e.g. '
-                         f'{", ".join(sorted(ips)[:5])})'),
+            description=(f'Distributed SSH brute force{who}: {count} failed logins from {len(ips)} addresses in '
+                         f'{_span(window)}, each below the per-address alarm (e.g. {", ".join(sorted(ips)[:5])})'),
+            detected_by=self.name_id,
+        )
+
+    def _spread_match(self, now, user):
+        """The first rule the recent failures cross, as (failures, addresses, window seconds, ' against account X' or ''),
+        or None."""
+        for window, min_fails, min_ips in self.SPREAD_RULES:
+            inside = [(t, i) for t, i, *_ in reversed(self.recent_window(now, window))]
+            ips = {i for _, i in inside}
+            if len(inside) >= min_fails and len(ips) >= min_ips:
+                return len(inside), ips, window, ''
+        window, min_fails, min_ips = self.ACCOUNT_RULE
+        if user and user != 'unknown':
+            mine = [e for e in self.recent_window(now, window) if len(e) > 2 and e[2] == user]
+            ips = {e[1] for e in mine}
+            if len(mine) >= min_fails and len(ips) >= min_ips:
+                return len(mine), ips, window, f' against the account {user}'
+        return None
+
+    def recent_window(self, now, window):
+        """The remembered failures from the last `window` seconds, newest last."""
+        out = []
+        for entry in reversed(self._recent_fails):
+            if now - entry[0] > window:
+                break
+            out.append(entry)
+        out.reverse()
+        return out
+
+    def _login_after_failures(self, ip, user, now=None):
+        """A successful login from an address that just failed SUCCESS_AFTER+ times: the guess probably worked. Critical,
+        once per address and user, never for this machine itself (loopback)."""
+        if ip == 'unknown' or ip.startswith('127.') or ip == '::1':
+            return
+        fails = self._recent_failures(ip, now)
+        key = f'{ip}:{user}'
+        if fails < self.SUCCESS_AFTER or key in self._bf_success:
+            return
+        self._bf_success.add(key)
+        self._submit(
+            url=ip,
+            threat_type='brute-force-success',
+            severity='critical',
+            description=(f'Successful SSH login as {user} from {ip} after {fails} failed attempts from that address '
+                         'in the last 48 hours: the password may have been guessed'),
             detected_by=self.name_id,
         )
 
@@ -569,40 +680,48 @@ class AuthLogAgent(BaseAgent):
                 new_lines = f.readlines()
                 self._last_pos = f.tell()
             for line in new_lines:
-                if 'Failed password' in line or 'Invalid user' in line:
-                    ip_match = re.search(r'from (\d+\.\d+\.\d+\.\d+)', line)
-                    ip = ip_match.group(1) if ip_match else 'unknown'
-                    self._fail_counts[ip] = self._fail_counts.get(ip, 0) + 1
-                    self._note_spread(ip)
-# alert only when the count reaches exactly 5, 20 or 50, so one address does not raise a new finding on every failed attempt (high from 20)
-                    if self._fail_counts[ip] in (5, 20, 50):
-                        sev = 'high' if self._fail_counts[ip] >= 20 else 'medium'
-                        self._submit(
-                            url=ip,
-                            threat_type='brute-force',
-                            severity=sev,
-                            description=f'SSH brute force from {ip} — {self._fail_counts[ip]} failed attempts',
-                            detected_by=self.name_id,
-                        )
-                if 'Accepted publickey' in line or 'Accepted password' in line:
-                    ip_match = re.search(r'from (\d+\.\d+\.\d+\.\d+)', line)
-                    user_match = re.search(r'for (\S+) from', line)
-                    ip = ip_match.group(1) if ip_match else 'unknown'
-                    user = user_match.group(1) if user_match else 'unknown'
-                    key = f'{ip}:{user}'
-                    _local_node_ip = os.environ.get('NODE1_IP', '')
-                    if key not in self._seen and ip not in ('127.0.0.1', _local_node_ip):
-                        self._seen.add(key)
-                        self._submit(
-                            url=ip,
-                            threat_type='ssh-login',
-                            severity='low',
-                            description=f'SSH login from {ip}',
-                            detected_by=self.name_id,
-                        )
+                self.handle_line(line)
             _save_offset(self, log_path)
         except PermissionError:
             self.log.warning('No permission to read auth.log — try running as root')
+
+    def handle_line(self, line, now=None):
+        """Act on one auth.log line: a failed login (per-address alarm at 5, 20 and 50 within 48 hours, plus the distributed
+        rules) or a successful one (first login per address and user; critical when it follows 5+ failures)."""
+        # Note: sshd writes BOTH "Invalid user" and "Failed password" for one attempt at an account that does not exist, so
+        # such an attempt counts twice. Kept on purpose (owner decision, 2026-11-16): guessing names that do not exist is
+        # worth the extra weight. tools/test_slow_bruteforce.py pins it.
+        if 'Failed password' in line or 'Invalid user' in line:
+            ip = ssh_source(line) or 'unknown'          # IPv4 or IPv6 (2026-11-18); ::ffff:a.b.c.d counts as a.b.c.d
+            user_match = self._FAILED_USER.search(line)
+            count = self._note_failure(ip, now)
+            self._note_spread(ip, now, user_match.group(1) if user_match else None)
+            # alert only when the count reaches exactly 5, 20 or 50, so one address does not raise a new finding on every
+            # failed attempt (high from 20)
+            if count in (5, 20, 50):
+                self._submit(
+                    url=ip,
+                    threat_type='brute-force',
+                    severity='high' if count >= 20 else 'medium',
+                    description=f'SSH brute force from {ip} — {count} failed attempts in the last 48 hours',
+                    detected_by=self.name_id,
+                )
+        if 'Accepted publickey' in line or 'Accepted password' in line or 'Accepted keyboard-interactive' in line:
+            user_match = re.search(r'for (\S+) from', line)
+            ip = ssh_source(line) or 'unknown'
+            user = user_match.group(1) if user_match else 'unknown'
+            self._login_after_failures(ip, user, now)
+            key = f'{ip}:{user}'
+            _local_node_ip = os.environ.get('NODE1_IP', '')
+            if key not in self._seen and ip not in ('127.0.0.1', '::1', _local_node_ip):
+                self._seen.add(key)
+                self._submit(
+                    url=ip,
+                    threat_type='ssh-login',
+                    severity='low',
+                    description=f'SSH login from {ip}',
+                    detected_by=self.name_id,
+                )
 
 
 # ── 3. Syslog Agent ───────────────────────────────────────────────────────────
@@ -638,36 +757,42 @@ class SyslogAgent(BaseAgent):
                 lines = f.readlines()
                 self._last_pos = f.tell()
             for line in lines:
-                for pattern, threat_type, severity in self.PATTERNS:
-                    if re.search(pattern, line, re.IGNORECASE):
-                        # UFW BLOCK lines fire constantly for routine outbound egress
-                        # (our own traffic to the internet getting blocked by egress
-                        # rules) — that's not threat intel. Only flag *inbound* blocks:
-                        # an external host (SRC not private) hitting our LAN (DST private).
-                        if threat_type == 'firewall-block':
-                            src_m = re.search(r'SRC=(\d+\.\d+\.\d+\.\d+)', line)
-                            dst_m = re.search(r'DST=(\d+\.\d+\.\d+\.\d+)', line)
-                            src_ip = src_m.group(1) if src_m else None
-                            dst_ip = dst_m.group(1) if dst_m else None
-                            inbound = (dst_ip and _is_private_ip(dst_ip)
-                                       and src_ip and not _is_private_ip(src_ip))
-                            if not inbound:
-                                break
-                            src = src_ip
-                        else:
-                            ip_match = re.search(r'(\d+\.\d+\.\d+\.\d+)', line)
-                            src = ip_match.group(1) if ip_match else 'syslog'
-                        self._submit(
-                            url=src,
-                            threat_type=threat_type,
-                            severity=severity,
-                            description=sanitize_log_line(line)[:200],
-                            detected_by=self.name_id,
-                        )
-                        break
+                self.handle_line(line)
             _save_offset(self, log_path)
         except PermissionError:
             self.log.warning('No permission to read syslog')
+
+    def handle_line(self, line):
+        """Report the first pattern in PATTERNS that matches one syslog line (firewall blocks only when inbound)."""
+        for pattern, threat_type, severity in self.PATTERNS:
+            if not re.search(pattern, line, re.IGNORECASE):
+                continue
+            # UFW BLOCK lines fire constantly for routine outbound egress (our own traffic to the internet getting blocked by
+            # egress rules): that's not threat intel. Only flag *inbound* blocks from an external host (SRC not private).
+            # Inbound means: the destination is on our network (IPv4 behind NAT), or the packet came IN on an interface and
+            # was going nowhere else (IN=eth0 OUT=), which is how an IPv6 packet to this host's own public address looks:
+            # IPv6 has no NAT, so its DST is rarely private. Addresses are IPv4 or IPv6 (2026-11-18).
+            if threat_type == 'firewall-block':
+                src_m = re.search(r'SRC=(\S+)', line)
+                dst_m = re.search(r'DST=(\S+)', line)
+                src_ip = find_ip(src_m.group(1)) if src_m else None
+                dst_ip = find_ip(dst_m.group(1)) if dst_m else None
+                to_this_host = bool(re.search(r'\bIN=\S+', line)) and bool(re.search(r'\bOUT=(\s|$)', line))
+                inbound = (src_ip and not _is_private_ip(src_ip)
+                           and ((dst_ip and _is_private_ip(dst_ip)) or to_this_host))
+                if not inbound:
+                    return
+                src = src_ip
+            else:
+                src = find_ip(line) or 'syslog'
+            self._submit(
+                url=src,
+                threat_type=threat_type,
+                severity=severity,
+                description=sanitize_log_line(line)[:200],
+                detected_by=self.name_id,
+            )
+            return
 
 
 # ── 4. Pi-hole DNS Agent ──────────────────────────────────────────────────────
@@ -824,11 +949,27 @@ class ProcessMonitorAgent(BaseAgent):
     # ordinary words. (2026-10-10: an operator's own `bash -c "... python -c ..."` raised a CRITICAL "C2" finding.)
     MINERS = {'cryptominer', 'xmrig', 'minerd', 'cgminer', 'ccminer', 'cpuminer', 'nbminer', 'phoenixminer'}
     NETCATS = {'nc', 'ncat', 'netcat', 'nc.traditional', 'nc.openbsd'}
-    INTERPRETERS = re.compile(r'^(python[\d.]*|perl|ruby|php|node|lua)$')
+    SHELLS = {'bash', 'sh', 'zsh', 'dash', 'ksh', 'ash'}
+    WRAPPERS = {'busybox', 'toybox'}                  # one binary that runs many tools: `busybox nc -e /bin/sh ...`
+    AWKS = {'awk', 'gawk', 'mawk', 'nawk'}
+    INTERPRETERS = re.compile(r'^(python[\d.]*|perl|ruby|php[\d.]*|node|lua[\d.]*)$')
     EXEC_FLAGS = {'-c', '-e', '-r', '-E'}
     # code that opens a socket and wires it to a shell - what an interpreter reverse shell actually contains
-    REVSHELL_CODE = re.compile(r'(/dev/tcp/|pty\.spawn|os\.dup2|fsockopen|socket\.socket|TCPSocket|IO\.popen|'
-                               r'socket\s*\(\s*S\b|\bnc\s+-[a-z]*e\b)', re.I)
+    REVSHELL_CODE = re.compile(r'(/dev/tcp/|/dev/udp/|pty\.spawn|os\.dup2|fsockopen|socket\.socket|TCPSocket|IO\.popen|'
+                               r'socket\s*\(\s*S\b|\bnc\s+-[a-z]*e\b|IO::Socket|Socket::INET|proc_open|child_process|'
+                               r'net\.(Socket|connect|createConnection)|require\(\s*.net.\s*\)|socket\.tcp\s*\(|'
+                               r'subprocess\.(call|Popen|run)\s*\(\s*\[?\s*["\']/bin/(ba)?sh)', re.I)
+    NETCAT_LONG_EXEC = re.compile(r'^--(exec|sh-exec|lua-exec)(=|$)')
+    BARE_IP_URL = re.compile(r'\b(?:https?|ftp)://(?:(?!127\.)\d{1,3}(?:\.\d{1,3}){3}|\[(?!::1\])[0-9A-Fa-f:.]*:[0-9A-Fa-f:.]*'
+                             r'(?:%25[\w.-]+)?\])(?::\d+)?/')      # IPv4, or IPv6 in brackets (not loopback)
+    TEMP_DIRS = ('/tmp/', '/var/tmp/', '/dev/shm/')
+    # a hidden folder or file under a temp directory (/tmp/.x/run, /dev/shm/.cache.sh). AppImages mount at /tmp/.mount_*,
+    # which is normal, so that one prefix is left out.
+    HIDDEN_TEMP = re.compile(r'^(?:/tmp|/var/tmp|/dev/shm)(?:/[^/\s]+)*?/\.(?!mount_)[^/\s]+')
+    MINER_ARGS = re.compile(r'(stratum\+(tcp|ssl|tls)://|(^|\s)--donate-level\b|(^|\s)(--algo[= ]|-a\s+)'
+                            r'(rx/|randomx|cn/|cryptonight|kawpow|ethash|etchash|autolykos|ghostrider|argon2))', re.I)
+    CPU_HOT = 0.9                     # share of one core counted as "pinned"
+    CPU_HOT_SECONDS = 600             # pinned this long, from a temp directory: report it
 
     @classmethod
     def classify(cls, args):
@@ -839,44 +980,125 @@ class ProcessMonitorAgent(BaseAgent):
         exe = parts[0].rsplit('/', 1)[-1].lower()
         if exe in cls.MINERS:
             return exe
-        if exe in cls.NETCATS and any(re.fullmatch(r'-[a-zA-Z]*[ec][a-zA-Z]*', p) for p in parts[1:]):
+        if exe in cls.WRAPPERS and len(parts) > 1:
+            inner = cls.classify(' '.join(parts[1:]))
+            return f'{exe}-{inner}' if inner else None
+        if exe in cls.NETCATS and any(re.fullmatch(r'-[a-zA-Z]*[ec][a-zA-Z]*', p) or cls.NETCAT_LONG_EXEC.match(p)
+                                      for p in parts[1:]):
             return 'netcat-exec'
-        if '/dev/tcp/' in args and exe in ('bash', 'sh', 'zsh', 'dash', 'ksh'):
-            return 'bash-devtcp'
+        if exe == 'socat' and re.search(r'(^|[\s,!])(exec|system):', args, re.I):
+            return 'socat-exec'
+        if exe in cls.AWKS and re.search(r'/inet/(tcp|udp)/', args):
+            return 'awk-inet'
+        if exe == 'openssl' and 's_client' in parts and '-quiet' in parts and find_ip_port(args):
+            return 'openssl-shell'
+        if exe in cls.SHELLS:
+            if re.search(r'/dev/(tcp|udp)/', args):
+                return 'bash-devtcp'
+            if 'mkfifo' in args and re.search(r'\b(nc|ncat|netcat|telnet|socat)\b|openssl\s+s_client', args):
+                return 'fifo-shell'
+        if cls._is_dropper(args):
+            return 'ip-dropper'
+        if cls.MINER_ARGS.search(args):
+            return 'miner-args'
         if cls.INTERPRETERS.match(exe) and cls.EXEC_FLAGS.intersection(parts[1:]) and cls.REVSHELL_CODE.search(args):
             return 'interpreter-revshell'
+        if cls._runs_from_hidden_temp(exe, parts):
+            return 'hidden-temp-program'
         return None
+
+    @classmethod
+    def _is_dropper(cls, args):
+        """A download from a bare IP address that is then run: piped into a shell, made executable, or saved to a temp
+        directory. (Real software downloads use names, not raw addresses.)"""
+        if not re.search(r'\b(curl|wget|fetch|tftp)\b', args) or not cls.BARE_IP_URL.search(args):
+            return False
+        return bool(re.search(r'\|\s*(sudo\s+)?(ba|z|da|k)?sh\b|chmod\s+(\+x|[0-7]*7[0-7]*)\b|'
+                              r'(-O|-o|--output(-document)?)\s*=?\s*(/tmp|/var/tmp|/dev/shm)/', args))
+
+    @classmethod
+    def _runs_from_hidden_temp(cls, exe, parts):
+        """The program itself, or the script an interpreter/shell is running, sits in a hidden folder under a temp directory."""
+        if cls.HIDDEN_TEMP.match(parts[0]):
+            return True
+        if cls.INTERPRETERS.match(exe) or exe in cls.SHELLS:
+            script = next((p for p in parts[1:] if not p.startswith('-')), '')
+            return bool(cls.HIDDEN_TEMP.match(script))
+        return False
+
+    @staticmethod
+    def impersonates_kernel(pid, ppid, args):
+        """A process that names itself like a kernel thread ("[kworker/0:1]") but is not one: real kernel threads are
+        children of kthreadd (process 2), or kthreadd itself."""
+        name = args.strip()
+        return name.startswith('[') and name.endswith(']') and pid != '2' and ppid not in ('0', '2')
 
     def setup(self):
         self._flagged = _BoundedSet(10000)
+        self._cpu = {}                    # pid -> (cpu seconds, wall time, pinned since or None)
+
+    def cpu_pinned(self, pid, cpu_seconds, now):
+        """Track one process's CPU use between scans; True once it has used CPU_HOT of a core for CPU_HOT_SECONDS."""
+        prev = self._cpu.get(pid)
+        if prev is None or now <= prev[1] or cpu_seconds < prev[0]:
+            self._cpu[pid] = (cpu_seconds, now, None)
+            return False
+        share = (cpu_seconds - prev[0]) / (now - prev[1])
+        since = (prev[2] if prev[2] is not None else prev[1]) if share >= self.CPU_HOT else None
+        self._cpu[pid] = (cpu_seconds, now, since)
+        return since is not None and now - since >= self.CPU_HOT_SECONDS
+
+    @staticmethod
+    def program_path(pid, args):
+        """Where the program file is: the kernel's link when readable (root), else the command's first word if absolute."""
+        try:
+            return os.readlink(f'/proc/{pid}/exe').replace(' (deleted)', '')
+        except OSError:
+            first = args.split()[0] if args.split() else ''
+            return first if first.startswith('/') else ''
 
     def scan(self):
-        """List all running processes and report each one that classify() recognises as a miner or reverse shell, once
-        per process id. Skips this process and its parent."""
+        """List all running processes and report each one that classify() recognises (miner, reverse shell, dropper ...),
+        a fake kernel thread, or a program from a temp directory pinning a CPU core for 10+ minutes. Once per process id.
+        Skips this process and its parent."""
         try:
-            r = subprocess.run(['ps', '-eo', 'pid=,user=,args='], capture_output=True, text=True, timeout=10)
+            r = subprocess.run(['ps', '-eo', 'pid=,ppid=,user=,times=,args='], capture_output=True, text=True, timeout=10)
             me = {str(os.getpid()), str(os.getppid())}
+            now = time.monotonic()
+            alive = set()
             for line in r.stdout.splitlines():
-# split into pid, user and the rest: the command line itself contains spaces, so only split twice
-                bits = line.split(None, 2)
-                if len(bits) < 3 or bits[0] in me:
+# split into pid, ppid, user, cpu seconds and the rest: the command line itself contains spaces, so only split four times
+                bits = line.split(None, 4)
+                if len(bits) < 5 or bits[0] in me:
                     continue
-                pid, user, args = bits
+                pid, ppid, user, cpu, args = bits
+                alive.add(pid)
                 pattern = self.classify(args)
-                if not pattern:
-                    continue
-                key = f'{pattern}:{pid}'
-                if key not in self._flagged:
-                    self._flagged.add(key)
-                    self._submit(
-                        url=f'process://{pid}',
-                        threat_type='suspicious-process',
-                        severity='high',
-                        description=f'Suspicious process detected ({pattern}): {user} {pid} {args.strip()[:150]}',
-                        detected_by=self.name_id,
-                    )
+                if not pattern and self.impersonates_kernel(pid, ppid, args):
+                    pattern = 'fake-kernel-thread'
+                if not pattern and cpu.isdigit() and self.cpu_pinned(pid, int(cpu), now):
+                    path = self.program_path(pid, args)
+                    if path.startswith(self.TEMP_DIRS):
+                        pattern = 'cpu-hog-from-temp'
+                if pattern:
+                    self._report(pattern, pid, user, args)
+            for gone in set(self._cpu) - alive:
+                del self._cpu[gone]
         except Exception as e:
             self.log.error(f'Process monitor error: {e}')
+
+    def _report(self, pattern, pid, user, args):
+        key = f'{pattern}:{pid}'
+        if key in self._flagged:
+            return
+        self._flagged.add(key)
+        self._submit(
+            url=f'process://{pid}',
+            threat_type='suspicious-process',
+            severity='high',
+            description=f'Suspicious process detected ({pattern}): {user} {pid} {args.strip()[:150]}',
+            detected_by=self.name_id,
+        )
 
 
 # ── 7. Socket Watch Agent (listening ports + outbound connections) ────────────
@@ -891,7 +1113,13 @@ class SocketWatchAgent(BaseAgent):
     LISTENER_EVERY = 2   # listeners are checked every 2nd cycle (120 s), connections every cycle (60 s)
 
     ALLOWED = ALLOWED_PORTS
-    SUSPICIOUS_PORTS = {4444, 4445, 31337, 6667, 6697, 1337, 8888, 9999}
+    # classic reverse-shell/IRC ports, plus mining-pool ports malware connects out to (3333, 14433, 14444, 45560, 45700)
+    SUSPICIOUS_PORTS = {4444, 4445, 31337, 6667, 6697, 1337, 8888, 9999, 3333, 14433, 14444, 45560, 45700}
+    # A listener only on loopback is reachable from this machine alone, so it is reported only when its owner is one of
+    # these (or runs from a temp directory, or looks like a reverse shell). Not used: a "hidden folder" rule on the
+    # program's path, because VS Code (~/.vscode-server) and Ollama (~/.ollama) live in hidden folders.
+    UNEXPECTED_OWNERS = (ProcessMonitorAgent.NETCATS | ProcessMonitorAgent.SHELLS | ProcessMonitorAgent.WRAPPERS
+                         | ProcessMonitorAgent.AWKS | ProcessMonitorAgent.MINERS | {'socat', 'perl', 'ruby', 'php', 'lua', 'openssl'})
     INTEL_COOLDOWN = 6 * 3600   # one report per listed endpoint per 6 h, however long the connection lasts
 
     def setup(self):
@@ -937,11 +1165,10 @@ class SocketWatchAgent(BaseAgent):
                 parts = line.split()
                 if len(parts) < 4:
                     continue
-                remote = parts[3]
-                m = re.search(r'(\d+\.\d+\.\d+\.\d+):(\d+)', remote)
-                if not m:
+                host, port = split_host_port(parts[3])            # 203.0.113.5:443 or [2001:db8::5]:443
+                ip = find_ip(host) if host else None
+                if ip is None:
                     continue
-                ip, port = m.group(1), int(m.group(2))
                 # FIX: original only filtered 192.168.x.x and 127.0.0.1, missing
                 # 10.x.x.x and 172.16.x.x RFC1918 ranges.  Use shared _is_private_ip().
                 if _is_private_ip(ip):
@@ -949,14 +1176,14 @@ class SocketWatchAgent(BaseAgent):
                 hit = intel.STORE.match_ip(ip, port)
                 if hit is not None:
                     self._report_intel(hit, line)
-                key = f'{ip}:{port}'
+                key = f'[{ip}]:{port}' if ':' in ip else f'{ip}:{port}'
                 if port in self.SUSPICIOUS_PORTS and key not in self._seen:
                     self._seen.add(key)
                     self._submit(
                         url=key,
                         threat_type='c2-beacon',
                         severity='high',
-                        description=f'Suspicious outbound connection to {ip}:{port} — possible C2 channel',
+                        description=f'Suspicious outbound connection to {key} — possible C2 channel',
                         detected_by=self.name_id,
                     )
         except Exception as e:
@@ -967,12 +1194,8 @@ class SocketWatchAgent(BaseAgent):
         there on the next scan (this filters out short-lived ports)."""
         try:
             r = subprocess.run(['ss', '-tlnp'], capture_output=True, text=True, timeout=10)
-            current = set()
-            for line in r.stdout.splitlines()[1:]:
-# in `ss` output the local address looks like 0.0.0.0:22 followed by a space; capture the port number
-                m = re.search(r':(\d+)\s', line)
-                if m:
-                    current.add(int(m.group(1)))
+            listeners = self.listeners(r.stdout)
+            current = {p for p, info in listeners.items() if info['exposed'] or info['odd_owner']}
 
             candidates = {p for p in current if p not in self.ALLOWED and p not in self._known}
 
@@ -988,16 +1211,44 @@ class SocketWatchAgent(BaseAgent):
             confirmed = candidates & self._pending
             for port in confirmed:
                 self._known.add(port)
+                info = listeners[port]
+                where = 'reachable from the network' if info['exposed'] else 'on this machine only'
+                owner = f', program: {", ".join(sorted(info["owners"]))}' if info['owners'] else ''
                 self._submit(
                     url=f'localhost:{port}',
                     threat_type='unexpected-listener',
                     severity='medium',
-                    description=f'New unexpected listening port detected: {port}',
+                    description=f'New unexpected listening port detected: {port} ({where}{owner})',
                     detected_by=self.name_id,
                 )
             self._pending = candidates - confirmed
         except Exception as e:
             self.log.error(f'Port scan error: {e}')
+
+    @classmethod
+    def listeners(cls, ss_output, program_path=None, cmdline=None):
+        """Parse `ss -tlnp`: port -> {'exposed': bound beyond loopback, 'owners': program names, 'odd_owner': an owner a
+        loopback listener should not have}. `program_path`/`cmdline` look up a pid (tests pass fakes)."""
+        program_path = program_path or (lambda pid: ProcessMonitorAgent.program_path(pid, ''))
+        cmdline = cmdline or _cmdline_of
+        out = {}
+        for line in ss_output.splitlines()[1:]:
+            parts = line.split()
+            if len(parts) < 4:
+                continue
+            addr, sep, port = parts[3].rpartition(':')
+            if not sep or not port.isdigit():
+                continue
+            info = out.setdefault(int(port), {'exposed': False, 'owners': set(), 'odd_owner': False})
+            if not _is_loopback_bind(addr):
+                info['exposed'] = True
+            for name, pid in re.findall(r'\("([^"]+)",pid=(\d+)', line):
+                info['owners'].add(name)
+                if (name.lower() in cls.UNEXPECTED_OWNERS
+                        or program_path(pid).startswith(ProcessMonitorAgent.TEMP_DIRS)
+                        or ProcessMonitorAgent.classify(cmdline(pid) or name)):
+                    info['odd_owner'] = True
+        return out
 
 
 # ── 8. Local AI Analyzer Agent (Ollama; high / medium / low severity tiers) ───
@@ -1066,7 +1317,8 @@ class LocalAnalyzerAgent(BaseAgent):
             for threat in batch:
                 try:
                     resp = SESSION.post(f"{tier['host']}/api/generate",
-                                         json={'model': tier['model'], 'prompt': tier['prompt'](threat), 'stream': False},
+                                         json={'model': tier['model'], 'prompt': tier['prompt'](threat), 'stream': False,
+                                               'keep_alive': model_config.ollama_keep_alive()},
                                          timeout=tier['timeout'])
                 except requests.exceptions.RequestException as e:
                     # Don't mark as analyzed on timeout/connection error — retry next cycle
@@ -1261,12 +1513,14 @@ class SwarmConsensusAgent(BaseAgent):
             r = _api_get(f'{API}/threats/related', params={'url': threat.get('url') or '', 'exclude_id': threat.get('id', '')}, timeout=5)
             if r.status_code != 200:
                 raise ValueError(f'HTTP {r.status_code}')
-            evidence = local_evidence.assess(threat, r.json(), consensus)
+            related = r.json()
         except (requests.exceptions.RequestException, ValueError) as e:
             flow.note(local_evidence=f'could not be checked ({type(e).__name__})')
             return
+        direct = live_checks.check(threat)                 # read-only look at this machine now; never raises
+        evidence = local_evidence.assess(threat, related, consensus, direct=direct)
         local_evidence.apply(consensus, evidence)
-        flow.note(local_evidence=evidence['status'])
+        flow.note(local_evidence=evidence['status'], direct_check=direct['result'])
 
     def reload_swarm(self):
         """Re-init providers from the current environment (called when .env
@@ -1683,8 +1937,12 @@ class HostHealthAgent(BaseAgent):
 
     WATCHED = WATCHED_SERVICES
 
-    WATCH_PATHS = ['/etc/passwd', '/etc/shadow', '/etc/sudoers', '/etc/ssh/sshd_config',
+    WATCH_PATHS = ['/etc/passwd', '/etc/group', '/etc/shadow', '/etc/sudoers', '/etc/ssh/sshd_config',
                    os.path.join(ssai_config.BACKEND_DIR, 'app.py')]
+    HASH_MAX_BYTES = 32 * 1024 * 1024
+    # Logs that can explain an account-file change (change_evidence.py); only their last LOG_TAIL_BYTES are read.
+    EVIDENCE_LOGS = ('/var/log/auth.log', '/var/log/dpkg.log', '/var/log/apt/history.log')
+    LOG_TAIL_BYTES = 512 * 1024
 
     # Baseline survives restarts, so changes made while the agent was down (e.g. a code
     # deploy to app.py, or an edit during an ssai-agents restart) are still reported once.
@@ -1698,6 +1956,10 @@ class HostHealthAgent(BaseAgent):
                 raw = json.load(f)
             sigs = {p: tuple(v) for p, v in raw.get('sigs', {}).items()
                     if isinstance(v, list) and len(v) == 6}
+            # Content hashes and account snapshots were added 2026-11-15; a baseline from before has neither, and the
+            # first check then falls back to comparing size, time, owner and mode, exactly as before.
+            self._hashes = {p: h for p, h in (raw.get('hashes') or {}).items() if isinstance(h, str)}
+            self._snaps = {p: s for p, s in (raw.get('snaps') or {}).items() if isinstance(s, dict)}
             return sigs, set(raw.get('gone', []))
         except FileNotFoundError:
             return {}, set()
@@ -1713,7 +1975,9 @@ class HostHealthAgent(BaseAgent):
             tmp = self.BASELINE_PATH + '.tmp'
             with open(tmp, 'w') as f:
                 json.dump({'sigs': {p: list(sig) for p, sig in self._sigs.items()},
-                           'gone': sorted(self._gone)}, f)
+                           'gone': sorted(self._gone),
+                           'hashes': {p: h for p, h in self._hashes.items() if h},
+                           'snaps': self._snaps}, f)
             os.chmod(tmp, 0o600)
             os.replace(tmp, self.BASELINE_PATH)
         except OSError as e:
@@ -1735,6 +1999,7 @@ class HostHealthAgent(BaseAgent):
         self._states = {}
         self._told_no_systemd = False
         self._slow_due = 0.0
+        self._hashes, self._snaps = {}, {}
         saved_sigs, saved_gone = self._load_baseline()
         self._sigs = {}
         self._from_disk = set()
@@ -1750,7 +2015,73 @@ class HostHealthAgent(BaseAgent):
             except OSError as e:
                 if p not in self._gone:
                     self.log.warning(f'FileIntegrity: cannot baseline {p}: {e}')
+                continue
+            self._remember_content(p)
         self._save_baseline()
+
+    def _content_hash(self, p):
+        """SHA-256 of the file's contents, or None when it cannot be read (no permission, too big, gone)."""
+        try:
+            if os.path.getsize(p) > self.HASH_MAX_BYTES:
+                return None
+            h = hashlib.sha256()
+            with open(p, 'rb') as f:
+                for block in iter(lambda: f.read(1 << 16), b''):
+                    h.update(block)
+            return h.hexdigest()
+        except OSError:
+            return None
+
+    def _remember_content(self, p, digest=None):
+        """Store the file's hash, and for an account file a snapshot (never password hashes) to compare the next change with."""
+        self._hashes[p] = digest if digest is not None else self._content_hash(p)
+        if p in change_evidence.ACCOUNT_FILES:
+            text = self._read_text(p)
+            snap = change_evidence.snapshot(p, text) if text is not None else None
+            if snap is not None:
+                self._snaps[p] = snap
+            else:
+                self._snaps.pop(p, None)
+
+    @staticmethod
+    def _read_text(p):
+        try:
+            with open(p, 'r', errors='replace') as f:
+                return f.read()
+        except OSError:
+            return None
+
+    def _evidence_lines(self):
+        """The recent lines of the logs that can explain an account change. A missing or unreadable log is skipped."""
+        lines = []
+        for log_path in self.EVIDENCE_LOGS:
+            try:
+                with open(log_path, 'rb') as f:
+                    f.seek(0, os.SEEK_END)
+                    f.seek(max(0, f.tell() - self.LOG_TAIL_BYTES))
+                    lines += f.read().decode('utf-8', 'replace').splitlines()
+            except OSError:
+                continue
+        return lines
+
+    def _content_change(self, p, st, old, sig, digest):
+        """A watched file's contents changed. Returns (severity, description) to report, or None when change_evidence proves
+        the change harmless (a package install adding a system account, for example)."""
+        if old[0] == sig[0] and old[1] == sig[1]:
+            return 'high', (f'Contents of {p} changed although its size and modification time were restored '
+                            '(a typical sign of tampering)')
+        if p in change_evidence.ACCOUNT_FILES:
+            when = datetime.fromtimestamp(st.st_mtime).astimezone()          # local time, like syslog's own stamps
+            verdict = change_evidence.assess(p, None, self._read_text(p) or '', self._evidence_lines(), when,
+                                             passwd_text=self._read_text('/etc/passwd'),
+                                             group_text=self._read_text('/etc/group'),
+                                             old_snapshot=self._snaps.get(p))
+            if verdict['harmless']:
+                self.log.info(f'FileIntegrity: {p} changed, not reported: {verdict["reason"]} ({", ".join(verdict["changes"])})')
+                return None
+            detail = f'{verdict["reason"]}' + (f'; changes: {", ".join(verdict["changes"][:6])}' if verdict['changes'] else '')
+            return 'medium', f'Contents of {p} changed: {detail}'
+        return 'medium', f'Contents of {p} changed'
 
     def scan(self):
         """Check services every cycle; check disk space and critical files every SLOW_EVERY seconds. A failure in one
@@ -1793,31 +2124,60 @@ class HostHealthAgent(BaseAgent):
                 continue
             old = self._sigs.get(p)
             self._sigs[p] = sig
-            if old is None:
-                if p in self._gone:
-                    self._gone.discard(p)
+            if old is not None:
+                if self._compare(p, old, sig, after_downtime):
                     dirty = True
-                    self._submit(
-                        url=p,
-                        threat_type='file-modification',
-                        severity='medium',
-                        description=f'Critical file recreated after deletion: {p}',
-                        detected_by=self.name_id,
-                    )
-                else:
-                    dirty = True  # first sighting of a previously-unbaselined path
                 continue
-            if sig != old:
-                dirty = True
+            dirty = True                       # first sighting of this path, or it came back after being deleted
+            if p in self._gone:
+                self._gone.discard(p)
                 self._submit(
                     url=p,
                     threat_type='file-modification',
                     severity='medium',
-                    description=f'Critical file modified{after_downtime}: {p} ({", ".join(self._changed_fields(old, sig))} changed)',
+                    description=f'Critical file recreated after deletion: {p}',
                     detected_by=self.name_id,
                 )
+            self._remember_content(p)
         if dirty:
             self._save_baseline()
+
+    def _compare(self, p, old, sig, after_downtime=''):
+        """Compare one watched file with its baseline and report what matters. Returns True when the baseline changed.
+
+          * mode or owner changed           -> always reported (high)
+          * contents changed (SHA-256)      -> reported, high when size and time were put back; an account file is skipped
+                                               only when change_evidence proves the change harmless
+          * only the time or inode changed  -> silent (`touch`, or a rewrite with identical contents)
+          * no stored hash (a baseline from before hashes, or an unreadable file) -> any change of size, time, inode,
+                                               mode or owner is reported, as before hashes existed."""
+        st = None
+        try:
+            st = os.stat(p)
+        except OSError:
+            pass
+        old_hash = self._hashes.get(p)
+        new_hash = self._content_hash(p)
+        fields = self._changed_fields(old, sig)
+        owner_or_mode = [f for f in fields if f in ('mode', 'owner', 'group')]
+        report = None
+        if owner_or_mode:
+            what = ', '.join(owner_or_mode) + (' and contents' if old_hash and new_hash and old_hash != new_hash else '')
+            report = ('high', f'Critical file {p}: {what} changed{after_downtime}')
+        elif old_hash and new_hash:
+            if new_hash != old_hash and st is not None:
+                report = self._content_change(p, st, old, sig, new_hash)
+                if report is not None and after_downtime:
+                    report = (report[0], report[1] + after_downtime)
+        elif sig != old:
+            report = ('medium', f'Critical file modified{after_downtime}: {p} ({", ".join(fields)} changed)')
+        if report is not None:
+            self._submit(url=p, threat_type='file-modification', severity=report[0], description=report[1],
+                         detected_by=self.name_id)
+        changed = sig != old or new_hash != old_hash
+        if changed:
+            self._remember_content(p, new_hash)
+        return changed
 
     def _check_services(self):
         """Ask systemd whether each watched service is active and report one that was active on the previous scan and

@@ -103,7 +103,7 @@ class _OllamaProvider:
     def analyze(self, prompt: str) -> str:
         """Send the prompt to the local Ollama server and return its text reply. Optional settings (CPU thread cap, JSON
         mode, reasoning off) come from the model config or environment variables."""
-        body = {"model": self.model, "prompt": prompt, "stream": False}
+        body = {"model": self.model, "prompt": prompt, "stream": False, "keep_alive": model_config.ollama_keep_alive()}
         # Heat cap: fewer CPU threads runs cooler and slower. Per model via "num_thread" in the model config, or for
         # every local call via the OLLAMA_NUM_THREAD environment variable.
         try:

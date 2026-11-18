@@ -131,6 +131,17 @@ def endpoint_of(entry: dict) -> str:
     return ((os.environ.get(env, "").strip() if env else "") or entry.get("endpoint") or "").rstrip("/")
 
 
+def ollama_keep_alive():
+    """How long Ollama keeps a model in memory after answering. Default 0: unload at once, so a local model's several GB of RAM
+    are only used while it is answering (2026-11-15: a box running the panel and the analyzers ran out of memory). Set
+    SSAI_OLLAMA_KEEP_ALIVE to a number of seconds or an Ollama duration ("5m", "-1" = keep forever) to trade memory for speed."""
+    raw = os.environ.get("SSAI_OLLAMA_KEEP_ALIVE", "0").strip() or "0"
+    try:
+        return int(raw)
+    except ValueError:
+        return raw
+
+
 def key_of(entry: dict) -> str:
     """The API key: the environment variable named by key_env (existing .env files keep working), else the OS key vault item named
     by key_ref (keyvault.py). Empty when neither has one."""

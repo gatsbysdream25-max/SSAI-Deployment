@@ -8,7 +8,9 @@ User=@USER@
 WorkingDirectory=@DIR@/backend
 Environment=DATA_DIR=@DIR@
 Environment=PYTHONPATH=@DIR@/backend
-ExecStart=@DIR@/swarmsentinel-env/bin/gunicorn -w 2 --threads 4 --worker-class gthread -b @BIND@:@PORT@ --timeout 60 app:app
+# One worker, 8 threads (2026-11-15): each extra worker is a full copy of the app in RAM; the dashboard is mostly waiting on I/O,
+# so threads serve it as well. One worker also means one process counts the automatic-response hourly cap.
+ExecStart=@DIR@/swarmsentinel-env/bin/gunicorn -w 1 --threads 8 --worker-class gthread -b @BIND@:@PORT@ --timeout 60 app:app
 Restart=on-failure
 RestartSec=10
 

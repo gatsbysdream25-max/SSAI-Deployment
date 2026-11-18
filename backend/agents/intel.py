@@ -91,7 +91,7 @@ def parse_threatfox(data, min_confidence=MIN_CONFIDENCE):
                      'threat': str(r.get('threat_type') or 'unknown')[:40], 'confidence': conf}
             if kind == 'ip:port' and isinstance(val, str) and ':' in val:
                 host, _, port = val.rpartition(':')
-                ip = public_ip(host)
+                ip = public_ip(host.strip('[]'))                         # [2001:db8::5]:443 too
                 if ip and port.isdigit() and 0 < int(port) < 65536:
                     out.append(('endpoint', f'{ip}:{int(port)}', entry))
             elif kind == 'domain':

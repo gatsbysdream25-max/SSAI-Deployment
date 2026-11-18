@@ -40,9 +40,10 @@ def _is_ai(detector: str) -> bool:
             or "redteam" in low or "ledger-import" in low)       # synthetic probes and other installs' public ledger are not local proof
 
 
-def assess(threat: dict, related: List[dict], consensus: Optional[dict] = None) -> dict:
+def assess(threat: dict, related: List[dict], consensus: Optional[dict] = None, direct: Optional[dict] = None) -> dict:
     """Look for proof from this network (not from the AI models) that a finding is real, and rate it verified, partial or
-    unverified."""
+    unverified. `direct` is a live_checks.check() result: 'confirmed' counts as one independent proof; 'not-confirmed'
+    leaves the rating alone but the note says the machine no longer shows it."""
     own = str(threat.get("detected_by") or "")
     proofs: List[dict] = []
     seen_detectors = set()
@@ -66,7 +67,11 @@ def assess(threat: dict, related: List[dict], consensus: Optional[dict] = None) 
     feed = any(p["kind"] == "feed-hit" for p in proofs) or _is_feed(own)
     if _is_feed(own) and not any(p["kind"] == "feed-hit" for p in proofs):
         proofs.insert(0, {"kind": "feed-hit", "source": own, "finding": threat.get("id"), "type": threat.get("type")})
-    independent = sum(1 for p in proofs if p["kind"] == "second-detector")
+    direct_result = str((direct or {}).get("result") or "")
+    if direct_result == "confirmed":
+        proofs.append({"kind": "direct-check", "source": str(direct.get("check") or "live check"),
+                       "detail": str(direct.get("detail") or "")[:200]})
+    independent = sum(1 for p in proofs if p["kind"] in ("second-detector", "direct-check"))
     if feed or independent >= 2:
         status = VERIFIED
     elif independent == 1 or any(p["kind"] == "repeat-sightings" for p in proofs):
@@ -79,9 +84,14 @@ def assess(threat: dict, related: List[dict], consensus: Optional[dict] = None) 
             UNVERIFIED: "the AI models are the only evidence; nothing local confirms it"}[status]
     if conflict:
         note = "a threat feed lists this indicator but the panel said benign: a person must decide"
+    if direct_result == "not-confirmed":
+        note = f"{note}; not confirmed by a direct check ({str(direct.get('detail') or '')[:120]})"
+    out = {"status": status, "proofs": proofs[:10], "conflict": conflict, "note": note,
+           "checked": datetime.now(timezone.utc).isoformat(timespec="seconds")}
+    if direct:
+        out["direct"] = {k: direct.get(k) for k in ("result", "check", "detail", "at")}
     # At most 10 proofs are saved, so one very noisy indicator cannot make the stored verdict huge.
-    return {"status": status, "proofs": proofs[:10], "conflict": conflict, "note": note,
-            "checked": datetime.now(timezone.utc).isoformat(timespec="seconds")}
+    return out
 
 
 def apply(consensus: dict, evidence: dict) -> dict:
@@ -91,4 +101,8 @@ def apply(consensus: dict, evidence: dict) -> dict:
     if isinstance(quorum, dict) and evidence["status"] == UNVERIFIED and consensus.get("consensus_verdict") in ("malicious", "suspicious"):
         if "unverified" not in str(quorum.get("label", "")):
             quorum["label"] = f"{quorum.get('label', '')} | unverified: no local proof".strip(" |")
+    if (evidence.get("direct") or {}).get("result") == "not-confirmed":
+        consensus["direct_check"] = "not confirmed by a direct check"
+        if isinstance(quorum, dict) and "direct check" not in str(quorum.get("label", "")):
+            quorum["label"] = f"{quorum.get('label', '')} | not confirmed by a direct check".strip(" |")
     return consensus

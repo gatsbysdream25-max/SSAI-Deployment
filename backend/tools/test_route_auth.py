@@ -48,7 +48,13 @@ NODE_ONLY = {('POST', '/api/signal'), ('POST', '/api/node/heartbeat'),
              ('POST', '/api/node/actions/poll'), ('POST', '/api/node/actions/<int:id>/result')}
 # Deciding for others needs a signed-in PERSON: an API key is refused with 403 (the agents hold the same key).
 PERSON_ONLY = {('POST', '/api/remediation/<int:id>/approve'), ('POST', '/api/autonomy/grants'), ('POST', '/api/threats/<int:threat_id>/block'),
-               ('POST', '/api/nodes/<node_id>/actions'), ('POST', '/api/nodes/<node_id>/actions/<int:id>/undo')}
+               ('POST', '/api/nodes/<node_id>/actions'), ('POST', '/api/nodes/<node_id>/actions/<int:id>/undo'),
+               # automatic response (2026-11-15): changing the policy, Undo and Terminate
+               ('POST', '/api/auto/settings'), ('POST', '/api/auto/actions/<int:id>/undo'),
+               ('POST', '/api/auto/actions/<int:id>/terminate'),
+               ('POST', '/api/auto/break-glass/release'),
+               ('POST', '/api/auto/actions/<int:id>/keep'), ('POST', '/api/auto/alerts/test'),
+               ('POST', '/api/auto/alerts/<alert_id>/ack')}   # Week 2: Keep paused and the alerts are a person's   # break-glass (Week 1): engaging is open to the key, releasing is not
 # Teams approvals: the Copilot lane key AND an approver's own Entra token. Neither key alone (not even the admin key)
 # is enough; see test_copilot_remediation.py for the token checks.
 TEAMS_APPROVER = {('POST', '/api/copilot/remediation/<int:id>/approve'), ('POST', '/api/copilot/remediation/<int:id>/reject')}

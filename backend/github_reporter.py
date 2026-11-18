@@ -39,6 +39,8 @@ EXPORT_DIR  = os.path.join(REPO, 'threats')
 LEDGER_PATH = os.path.join(EXPORT_DIR, 'known_threats.json')
 STATE_FILE  = ssai_config.GITHUB_STATE_PATH
 INTERVAL    = int(os.environ.get('SSAI_GH_INTERVAL', 300))   # 5 min default
+# Repeat sightings of threats already in the ledger are published at most this often (one commit per batch, not per sighting).
+REPEAT_INTERVAL = int(os.environ.get('SSAI_GH_REPEAT_INTERVAL', 3600))
 GIT_NAME    = 'SwarmSentinel Bot'
 GIT_EMAIL   = 'swarmsentinel@local.host'
 
@@ -98,6 +100,40 @@ def fetch_new_threats(last_id):
     rows = [dict(r) for r in cur.fetchall()]
     conn.close()
     return rows
+
+
+def fetch_repeat_sightings(last_id, since):
+    """Threats ALREADY published (id <= last_id) that were seen again after `since` (an ISO time). The detectors merge a repeat
+    into the existing row (times_seen, last_seen) instead of adding a row, so without this the ledger never hears about them:
+    from 4 November 2026 every finding was a repeat and the ledger, and the dashboard's "last push", stood still."""
+    cutoff = (since or '')[:26].replace('T', ' ')
+    if not cutoff:
+        return []
+    conn = sqlite3.connect(DB_PATH, timeout=5)
+    conn.row_factory = sqlite3.Row
+    try:
+        cur = conn.execute('''
+            SELECT id, url, type, severity, description, detected_by, node_id, status, last_seen AS timestamp
+            FROM threat WHERE id <= ? AND last_seen IS NOT NULL AND last_seen > ? ORDER BY id ASC
+        ''', (last_id, cutoff))
+        return [dict(r) for r in cur.fetchall()]
+    except sqlite3.OperationalError as exc:            # an older database without last_seen: new rows still flow
+        log.debug(f"repeat sightings not read: {exc}")
+        return []
+    finally:
+        conn.close()
+
+
+def _due(last, interval, now):
+    if not last:
+        return True
+    try:
+        then = datetime.fromisoformat(str(last))
+    except ValueError:
+        return True
+    if then.tzinfo is None:
+        then = then.replace(tzinfo=timezone.utc)
+    return (now - then).total_seconds() >= interval
 
 
 def fetch_all_threats():
@@ -407,23 +443,37 @@ def run_cycle():
     """
     load_private_names()                      # machines can appear at any time: refresh the names to mask every cycle
     state = load_state()
+    now = datetime.now(timezone.utc)
+    state['last_check'] = now.isoformat()     # the dashboard shows the reporter is alive even when there is nothing to push
     state['last_id'] = resync_cursor(state['last_id'], state.get('last_push'))
     threats = fetch_new_threats(state['last_id'])
-    if not threats:
-        log.debug('No new threats since last run.')
+    since = state.get('repeats_since') or state.get('last_push')
+    repeats = []
+    if _due(state.get('last_push'), REPEAT_INTERVAL, now) or threats:
+        repeats = fetch_repeat_sightings(state['last_id'], since)
+    if not threats and not repeats:
+        log.debug('No new threats or repeat sightings to publish since last run.')
+        save_state(state)
         push_waiting_commits()
         return
 
     ledger = load_ledger()
     new_count, repeat_count = update_ledger(ledger, threats)
+    added, seen_again = update_ledger(ledger, repeats)       # a repeat of something older than the ledger is new to it
+    new_count += added
+    repeat_count += seen_again
     save_ledger(ledger)
+    # The next repeat window starts at this cycle: a row published now (new or repeat) is not sent again unless seen again later.
+    state['repeats_since'] = now.isoformat()
+    state['ledger_size'] = len(ledger)
 
     msg = (f'threat-intel: {new_count} new, {repeat_count} repeat sightings '
            f'({len(ledger)} known threats total) — '
            f'{datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")}')
     pushed = git_commit_push(msg)
 
-    state['last_id']   = max(t['id'] for t in threats)
+    if threats:
+        state['last_id'] = max(t['id'] for t in threats)
     state['last_push'] = datetime.now(timezone.utc).isoformat()
     save_state(state)
     log.info(f'Cycle complete. last_id={state["last_id"]}, new={new_count}, '

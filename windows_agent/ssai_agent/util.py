@@ -12,9 +12,13 @@ import time
 from collections import deque
 
 # Home and office address ranges. The hub and the public ledger only ever see these masked, like the Linux agents do.
+# IPv6 (2026-11-18): loopback, unique-local (fd..) and link-local (fe80::) are inside the network too. Listed explicitly: Python's
+# own is_private also counts documentation and other special ranges, which are not anyone's home network.
 _PRIVATE_NETWORKS = [ipaddress.ip_network(n) for n in
-                     ("10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "127.0.0.0/8", "169.254.0.0/16")]
+                     ("10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "127.0.0.0/8", "169.254.0.0/16", "100.64.0.0/10",
+                      "::1/128", "fc00::/7", "fe80::/10")]
 _IPV4 = re.compile(r"\b(?:\d{1,3}\.){3}\d{1,3}\b")
+_IPV6 = re.compile(r"(?<![\w:.])(?:[0-9A-Fa-f]{0,4}:){2,7}(?:\d{1,3}(?:\.\d{1,3}){3}|[0-9A-Fa-f]{0,4})(?:%[\w.-]+)?(?![\w:])")
 
 
 def is_private_address(text):
@@ -23,20 +27,32 @@ def is_private_address(text):
         address = ipaddress.ip_address(text.strip().strip("[]"))
     except ValueError:
         return False
-    if address.version == 6:
-        return address.is_loopback or address.is_link_local or address.is_private
-    return any(address in network for network in _PRIVATE_NETWORKS)
+    if getattr(address, "ipv4_mapped", None) is not None:
+        address = address.ipv4_mapped
+    return any(address.version == network.version and address in network for network in _PRIVATE_NETWORKS)
 
 
 def mask_private_ips(text):
-    """Replace the last two parts of every private IPv4 address with 'xxx' (192.168.0.9 -> 192.168.xxx.xxx).
-    Public addresses stay readable, because they are what an investigation needs."""
+    """Replace the last two parts of every private IPv4 address with 'xxx' (10.1.0.9 -> 10.1.xxx.xxx) and keep only the first
+    two groups of a local IPv6 address (fd12:3456:789a::5 -> fd12:3456:xxxx::). Public addresses stay readable, because they are
+    what an investigation needs; IPv6 loopback (::1) names no device and stays too."""
+    def hide6(match):
+        raw = match.group(0)
+        try:
+            address = ipaddress.ip_address(raw.split("%", 1)[0])
+        except ValueError:
+            return raw
+        if address.ipv4_mapped is not None or address.is_loopback or not is_private_address(raw.split("%", 1)[0]):
+            return raw                         # a mapped IPv4 address is masked by the IPv4 pass below
+        groups = address.exploded.split(":")
+        return f"{int(groups[0], 16):x}:{int(groups[1], 16):x}:xxxx::"
+
     def hide(match):
         if is_private_address(match.group(0)):
             first, second = match.group(0).split(".")[:2]
             return f"{first}.{second}.xxx.xxx"
         return match.group(0)
-    return _IPV4.sub(hide, text or "")
+    return _IPV4.sub(hide, _IPV6.sub(hide6, text or ""))
 
 
 # Process ids of the programs this agent started, newest last. The Windows event log says which process wrote an event, so a

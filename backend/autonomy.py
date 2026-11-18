@@ -7,9 +7,12 @@ enforces it on every automatic action, and anything outside every grant waits in
 What a grant can NOT do, whatever it says and however many models agree (a vote never overrides these):
   * act on a degraded verdict, a stand-in panel, possible prompt injection, or an independent check that disagrees;
   * act without local proof (a threat-feed hit, or two independent detectors) unless the grant explicitly allows unverified;
+  * act unless a direct check of the machine, made at that moment (agents/live_checks.py), confirms the finding;
   * block anything inside the organisation (private, Tailscale, link-local) or on the operator's never-block list;
   * run after it expires, after it is revoked, or faster than its rate limit;
-  * act on severe or critical findings, unless the grant says allow_severe AND the person typed the confirmation sentence;
+  * act on high or critical findings, ever (Week 2 action-risk policy, action_risk.py: allow_severe was removed);
+  * act on a MEDIUM finding without full consensus: at least two independent model families (judged from the hub's own
+    registry, not from the verdict) voted malicious;
   * be created by an API key: only a signed-in person grants authority.
 Every automatic action writes its audit line BEFORE it acts (no record, no action), is named "auto:grant-N" in the queue, and is
 undone by the same TTL rollback as a person's approval. Revoking a grant stops it at once; already-applied blocks run out their TTL.
@@ -24,7 +27,6 @@ log = logging.getLogger("autonomy")
 
 ACTIONS = ("block-ip", "block-domain")
 NORMAL_SEVERITIES = ("low", "medium")
-SEVERE_CONFIRMATION = "I understand severe findings will be acted on without a person"
 MIN_CONFIDENCE_FLOOR = 80          # a grant cannot ask for less than the proposal queue already requires
 MIN_AI_COUNT_FLOOR = 3
 MAX_DAYS = 90                      # a permission always ends: renew it on purpose
@@ -33,9 +35,11 @@ MAX_TTL_HOURS = 24 * 7
 LIMITS = (
     "never on a degraded verdict, a stand-in panel, possible prompt injection, or an independent check that disagrees",
     "never without local proof (threat-feed hit or two independent detectors) unless the grant allows unverified",
+    "never unless a direct check of the machine, made at that moment, confirms the finding",
     "never on an internal, private, Tailscale or never-block address",
     "never after it expires or is revoked, nor faster than its rate limit",
-    "never on high or critical findings unless allow_severe is true with the typed confirmation",
+    "never on high or critical findings: those always go to a person",
+    "never on a medium finding unless at least two independent model families voted malicious",
     "no number of agreeing models can override any of the above",
 )
 
@@ -62,8 +66,8 @@ def validate_new(data: dict, now: Optional[datetime] = None) -> Tuple[Optional[d
     severe = [s for s in severities if s not in NORMAL_SEVERITIES]
     if any(s not in ("low", "medium", "high", "critical") for s in severe):
         return None, "unknown severity in the list"
-    if severe and not (data.get("allow_severe") is True and data.get("confirmation") == SEVERE_CONFIRMATION):
-        return None, f"high and critical findings keep needing a person unless allow_severe is true and confirmation is exactly: \"{SEVERE_CONFIRMATION}\""
+    if severe:
+        return None, "high and critical findings always need a person; a permission can cover low and medium only"
     try:
         confidence = int(data.get("min_confidence", 90))
         ai_count = int(data.get("min_ai_count", 3))
@@ -91,7 +95,8 @@ def _target_action(kind: str) -> str:
     return {"ip": "block-ip", "domain": "block-domain"}.get(kind, "")
 
 
-def check(grant, threat, consensus: dict, target: dict, now: Optional[datetime] = None, recent_auto: int = 0) -> Tuple[bool, str]:
+def check(grant, threat, consensus: dict, target: dict, now: Optional[datetime] = None, recent_auto: int = 0,
+          voters: Optional[dict] = None) -> Tuple[bool, str]:
     """May this grant cover this finding right now? (True, '') or (False, the first reason it does not)."""
     now = now or datetime.now(timezone.utc)
     if grant.revoked_at is not None:
@@ -113,11 +118,23 @@ def check(grant, threat, consensus: dict, target: dict, now: Optional[datetime] 
         return False, "an independent check or a threat feed disagrees"
     if grant.require_verified and ev.get("status") != "verified":
         return False, "no local proof (needs a threat-feed hit or two independent detectors)"
+    direct = ev.get("direct") if isinstance(ev.get("direct"), dict) else {}
+    if direct.get("result") != "confirmed":
+        # 2026-11-15: before acting, the machine itself is looked at again (live_checks.py). "not-confirmed" (the process is gone,
+        # the feed no longer lists it) and "inconclusive" (no check could run) both mean a person decides.
+        return False, f"a direct check could not confirm the finding ({direct.get('result') or 'not run'})"
     if int(consensus.get("confidence") or 0) < grant.min_confidence or int(consensus.get("ai_count") or 0) < grant.min_ai_count:
         return False, "below the grant's confidence or model-count minimum"
-    sev = str(consensus.get("consensus_severity") or "").lower()
+    import action_risk
+    sev = action_risk.stricter(consensus.get("consensus_severity"), getattr(threat, "severity", None))
+    if not action_risk.grant_may_cover(sev):
+        return False, f"{sev} findings always need a person"         # also stops grants stored before Week 2
     if sev not in {s for s in grant.severities.split(",") if s}:
         return False, f"severity {sev or 'unknown'} is not covered"
+    if sev == "medium":
+        ok, why = action_risk.full_consensus(consensus, {"min_families": 2, "min_confidence": grant.min_confidence}, voters)
+        if not ok:
+            return False, f"medium needs full consensus: {why}"
     if recent_auto >= grant.rate_limit_per_hour:
         return False, "rate limit reached for this hour"
     return True, ""
@@ -127,7 +144,7 @@ def _with_hub_evidence(threat, consensus: dict) -> dict:
     """A copy of the verdict whose local proof is recomputed HERE from the hub's own records. The verdict arrives in a request body
     that any holder of the admin key can write, so its own `evidence` is never believed: a forged "verified" must not start a block."""
     from datetime import timedelta
-    from agents import local_evidence, recall
+    from agents import live_checks, local_evidence, recall
     from models import Threat
     rows = []
     cands = recall.candidate_urls(threat.url or "")
@@ -135,9 +152,11 @@ def _with_hub_evidence(threat, consensus: dict) -> dict:
         since = datetime.now(timezone.utc) - timedelta(days=local_evidence.WINDOW_DAYS)
         for t in Threat.query.filter(Threat.url.in_(cands), Threat.id != threat.id, Threat.timestamp >= since).limit(25).all():
             rows.append({"id": t.id, "type": t.type, "detected_by": t.detected_by, "status": t.status})
+    facts = {"id": threat.id, "type": threat.type, "detected_by": threat.detected_by, "times_seen": threat.times_seen,
+             "url": threat.url, "description": threat.description, "node_id": threat.node_id, "real_source": threat.real_source}
+    direct = live_checks.check(facts)       # done HERE, now; a direct-check result in the request body is never believed either
     checked = dict(consensus)
-    checked["evidence"] = local_evidence.assess({"id": threat.id, "type": threat.type, "detected_by": threat.detected_by,
-                                                 "times_seen": threat.times_seen}, rows, consensus)
+    checked["evidence"] = local_evidence.assess(facts, rows, consensus, direct=direct)
     return checked
 
 
@@ -145,9 +164,22 @@ def matching_grant(threat, consensus: dict, target: dict):
     """The first live grant that covers this finding, as (grant, ''), or (None, why not) for the best-matching reason. Never raises."""
     try:
         from models import AutonomyGrant, PendingRemediation
+        import auto_response
+        import break_glass
         now = datetime.now(timezone.utc)
+        if break_glass.engaged():
+            return None, "break-glass is engaged: SSAI takes no automatic actions until a person releases it"
         why = "no permission has been granted"
-        for grant in AutonomyGrant.query.filter(AutonomyGrant.revoked_at.is_(None)).order_by(AutonomyGrant.id).all():
+        grants = AutonomyGrant.query.filter(AutonomyGrant.revoked_at.is_(None)).order_by(AutonomyGrant.id).all()
+        # One cap for everything SSAI does on its own: these grants AND the automatic responses together (2026-11-16, audit A-3).
+        if grants and auto_response.actions_last_hour(now) >= auto_response.HOURLY_CAP:
+            try:
+                from app import _AUDIT_PATH
+                break_glass.trip_on_cap(_AUDIT_PATH, auto_response.HOURLY_CAP)
+            except Exception:                                   # noqa: BLE001 -- the cap below still refuses
+                pass
+            return None, f"the cap of {auto_response.HOURLY_CAP} automatic actions an hour is reached"
+        for grant in grants:
             recent = PendingRemediation.query.filter(
                 PendingRemediation.decided_by == f"auto:grant-{grant.id}",
                 PendingRemediation.decided_at >= now - timedelta(hours=1)).count()
@@ -169,6 +201,9 @@ def act(row, grant, audit_path: str, approve=None):
     approve = approve or remediation_queue.approve_proposal
     who = f"auto:grant-{grant.id}"
     try:
+        import break_glass
+        if break_glass.engaged():                               # checked again at the moment of acting
+            raise RuntimeError("break-glass is engaged")
         remediation.audit_before_acting(audit_path, action="approve", stage="intent", proposal_id=row.id, by=who,
                                         grant=grant.id, kind=row.kind, target=row.target)
         approved, detail = approve(row.id, decided_by=who, ttl_hours=grant.ttl_hours)
@@ -179,4 +214,11 @@ def act(row, grant, audit_path: str, approve=None):
     remediation.audit(audit_path, action="approve", proposal_id=row.id, kind=row.kind, target=row.target, ok=True, by=who,
                       grant=grant.id, detail=detail,
                       expires_at=approved.expires_at.isoformat() if approved.expires_at else None)
+    try:
+        import alerts
+        alerts.raise_alert("auto-action", f"Automatic approval under permission {grant.id}: blocked {row.kind} {row.target}",
+                           f"finding {row.threat_id}; undone after {grant.ttl_hours} h unless a person ends it earlier",
+                           finding=row.threat_id, action=f"block-{row.kind}")
+    except Exception:                                           # noqa: BLE001 -- the block stands; the alert failure is logged
+        log.warning(f"alert for automatic approval {row.id} was not recorded")
     return approved

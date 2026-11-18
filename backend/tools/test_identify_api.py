@@ -231,6 +231,89 @@ class Api(unittest.TestCase):
             self.appmod._intel_cache.update(mtime=None, store=None)
             self.assertEqual(self.appmod._intel_lookup('ip', '50.16.16.211'), [])            # no cache file: quietly no listings
 
+    # ── device names for the IOC / Origin column (2026-11-15) ──
+    def test_labels_are_names_only_admin_only_and_this_machine_by_name(self):
+        self.post(A)                                                              # LAN device behind a masked address
+        self.post({'url': 'localhost:8081', 'type': 'unexpected-listener', 'severity': 'medium', 'detected_by': 't',
+                   'node_id': 'office-pc'})
+        self.post({'url': 'evil.example.com', 'type': 'malicious-domain', 'severity': 'high', 'detected_by': 't'})
+        ids = ','.join(str(r.id) for r in self.rows())
+        self.assertEqual(self.get(f'/api/identify/labels?ids={ids}', key=False).status_code, 401)
+        self.assertEqual(self.get(f'/api/identify/labels?ids={ids}', headers={'X-SSAI-Readonly': '1'}).status_code, 403)
+        ID._label_cache._d.clear()
+        with mock.patch.object(ID, 'reverse_dns', lambda ip: None), \
+             mock.patch.object(ID, '_arp_only', lambda ip: {'mac': '4c:50:dd:00:00:01'}), \
+             mock.patch.object(ID, 'oui_vendor', lambda mac: 'Acme'):
+            r = self.get(f'/api/identify/labels?ids={ids}')
+        self.assertEqual(r.status_code, 200)
+        labels = r.get_json()['labels']
+        rows = self.rows()
+        self.assertEqual(labels[str(rows[0].id)], {'name': 'Acme device', 'how': 'vendor'})
+        self.assertEqual(labels[str(rows[1].id)], {'name': 'office-pc', 'how': 'this-machine'})
+        self.assertNotIn(str(rows[2].id), labels)                                  # a domain has no device name
+        self.assertNotIn(LAN, r.get_data(as_text=True))                            # the real address never leaves the hub
+
+    def test_labels_bad_ids(self):
+        self.assertEqual(self.get('/api/identify/labels?ids=1,x').status_code, 400)
+        self.assertEqual(self.get('/api/identify/labels').get_json()['labels'], {})
+
+
+class DeviceLabel(unittest.TestCase):
+    """identify.device_label (2026-11-15 sync): Pi-hole name, then reverse DNS, then the network card's maker."""
+
+    def setUp(self):
+        ID._label_cache._d.clear()
+
+    def deps(self, pihole=None, rdns=None, mac=None, vendor=None):
+        import types
+        return types.SimpleNamespace(pihole=lambda ip: pihole, rdns=lambda ip: rdns,
+                                     arp=lambda ip: {'mac': mac} if mac else None, vendor=lambda m: vendor)
+
+    def test_order_pihole_then_reverse_dns_then_vendor(self):
+        self.assertEqual(ID.device_label('10.0.0.5', self.deps({'names': ['living-room-tv']}, 'x.lan', '4c:50:dd:00:00:01', 'Acme')),
+                         {'name': 'living-room-tv', 'how': 'pi-hole'})
+        ID._label_cache._d.clear()
+        self.assertEqual(ID.device_label('10.0.0.5', self.deps(None, 'printer.lan', '4c:50:dd:00:00:01', 'Acme'))['how'], 'reverse-dns')
+        ID._label_cache._d.clear()
+        self.assertEqual(ID.device_label('10.0.0.5', self.deps(None, None, '4c:50:dd:00:00:01', 'Acme')),
+                         {'name': 'Acme device', 'how': 'vendor'})
+
+    def test_private_mac_and_nothing_known(self):
+        self.assertEqual(ID.device_label('10.0.0.6', self.deps(mac='da:00:00:00:00:01'))['name'], 'phone or laptop (private MAC)')
+        self.assertEqual(ID.device_label('10.0.0.7', self.deps()), {'name': None, 'how': None})
+
+    def test_public_addresses_never_ask_the_pihole_or_arp(self):
+        import types
+        asked = []
+        deps = types.SimpleNamespace(pihole=lambda ip: asked.append('pihole'), rdns=lambda ip: 'edge.example.net',
+                                     arp=lambda ip: asked.append('arp'), vendor=lambda m: None)
+        # Documentation addresses (203.0.113.x) are not "global" to Python; tests use no real public address, so the
+        # address is declared public here.
+        with mock.patch.object(ID, 'scope_of', lambda ip: 'public'):
+            self.assertEqual(ID.device_label('203.0.113.9', deps), {'name': 'edge.example.net', 'how': 'reverse-dns'})
+        self.assertEqual(asked, [])
+
+    def test_a_failing_source_is_skipped_and_text_is_cleaned(self):
+        import types
+
+        def boom(ip):
+            raise OSError('down')
+        deps = types.SimpleNamespace(pihole=boom, rdns=lambda ip: 'evil\x1b[31m.lan', arp=boom, vendor=boom)
+        self.assertEqual(ID.device_label('10.0.0.8', deps)['name'], 'evil [31m.lan')
+
+    def test_loopback_and_garbage(self):
+        self.assertEqual(ID.device_label('127.0.0.1', self.deps(rdns='x')), {'name': None, 'how': 'this-machine'})
+        self.assertEqual(ID.device_label('not-an-ip', self.deps()), {'name': None, 'how': None})
+
+    def test_answers_are_cached_for_ten_minutes(self):
+        import types
+        calls = []
+        deps = types.SimpleNamespace(pihole=None, rdns=lambda ip: calls.append(ip) or 'a.lan', arp=None, vendor=None)
+        ID.device_label('10.0.0.9', deps)
+        ID.device_label('10.0.0.9', deps)
+        self.assertEqual(calls, ['10.0.0.9'])
+        self.assertEqual(ID._label_cache.ttl, 600)
+
 
 if __name__ == '__main__':
     unittest.main(verbosity=2)

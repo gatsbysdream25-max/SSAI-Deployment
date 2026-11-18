@@ -8,10 +8,12 @@ import tempfile
 import threading
 import time
 import unittest
+from unittest import mock
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path[:0] = [os.path.join(os.path.dirname(HERE), 'agents'), os.path.dirname(HERE)]
 import ai_swarm_agent as swarm  # noqa: E402
+import sanitizer  # noqa: E402
 
 TIERS = {'local', 'free', 'limited', 'credits', 'paid'}
 
@@ -124,6 +126,12 @@ class AnalyzeHonoursSwitches(unittest.TestCase):
         self._orig = swarm._PROVIDERS_PATH
         swarm._PROVIDERS_PATH = self.path
         swarm._overrides_cache.update(mtime=None, data={})
+        # Fake providers count as cloud, so the cloud gate writes an audit line per call. Send those lines to a temporary file:
+        # a test must never write to the real (root-owned on a live hub) instance/cloud_audit.jsonl.
+        audit = os.path.join(tempfile.mkdtemp(), 'cloud_audit.jsonl')
+        self._audit = mock.patch.object(sanitizer, 'audit_path', return_value=audit)
+        self._audit.start()
+        self.addCleanup(self._audit.stop)
 
     def tearDown(self):
         swarm._PROVIDERS_PATH = self._orig
