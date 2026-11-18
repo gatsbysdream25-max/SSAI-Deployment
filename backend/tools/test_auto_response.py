@@ -485,6 +485,31 @@ class Ending(Base):
         self.assertEqual(len(out['errors']), 1)
         self.assertEqual(AutoAction.query.first().status, 'done')
 
+    def test_a_block_that_keeps_failing_to_undo_alerts_a_person_once(self):
+        # Week 2 follow-up: after 3 failed undos in a row one alert asks a person to look; success clears the count.
+        import alerts
+        row = self.done(expires=NOW - timedelta(minutes=1))
+        deps = Fake().deps()
+        state = {'fail': True}
+
+        def unblock(target):
+            if state['fail']:
+                raise remediation.RemediationError('pihole down')
+        deps.unblock = unblock
+        for _ in range(2):
+            AR.sweep(self.audit, deps=deps, now=NOW)
+        self.assertEqual(alerts.open_alerts(), [])                       # two failures: still only retried
+        AR.sweep(self.audit, deps=deps, now=NOW)
+        AR.sweep(self.audit, deps=deps, now=NOW)
+        open_ = alerts.open_alerts()
+        self.assertEqual([a['kind'] for a in open_], ['undo-failed'])     # exactly one, not one per sweep
+        self.assertIn('203.0.113.9', open_[0]['title'])
+        self.assertIn('pihole down', open_[0]['detail'])
+        state['fail'] = False
+        AR.sweep(self.audit, deps=deps, now=NOW)
+        self.assertEqual(AutoAction.query.get(row.id).status, 'expired')
+        self.assertNotIn(f'auto:{row.id}', alerts._read_undo_failures())
+
     def test_sweep_with_nothing_due_builds_nothing(self):
         with mock.patch.object(AR, 'Deps', side_effect=AssertionError('should not be built')):
             self.assertEqual(AR.sweep(self.audit, now=NOW), {'expired': 0, 'errors': []})

@@ -29,7 +29,7 @@ import hashlib
 import ipaddress
 import json
 import sys
-from collections import deque, OrderedDict
+from collections import Counter, deque, OrderedDict
 from datetime import datetime, timedelta, timezone
 
 # agent_runner.py runs as a standalone script from backend/agents/, so its
@@ -220,7 +220,8 @@ def heartbeat(name, status='active', scan_count=None, threat_count=None, last_sc
 
 
 from agent_util import (_BoundedDict, _BoundedSet, _IFACE_RE, _MAC_RE, _PRIV_NETS, _SYSLOG_HOST_RE, _is_private_ip,   # noqa: F401
-                        find_ip, find_ip_port, mask_private_ip, sanitize_log_line, split_host_port, ssh_source)
+                        find_ip, find_ip_port, mask_private_ip, normalise_ip, sanitize_log_line, split_host_port,
+                        ssh_failure, ssh_source)
 
 
 def _span(seconds):
@@ -570,7 +571,30 @@ class AuthLogAgent(BaseAgent):
     FAIL_KEEP = 60
     SUCCESS_AFTER = 5                      # a login after this many failures from the same address is a critical finding
 
+    # One address doing most of the guessing is a plain brute force (it has its own alarm), not a distributed one: the
+    # distributed rules only count when no single address made more than SPREAD_MAX_SHARE of the failures in the window.
+    SPREAD_MAX_SHARE = 0.5
+
+    # Very slow guessing (2026-11-18, beta record Part C9): one try every 13 hours never reaches 5 inside 48 hours. A
+    # second, longer memory raises one medium 'slow-brute-force' finding per address when SLOW_FAILS failures fall on at
+    # least SLOW_DAYS different days within SLOW_MEMORY. No automatic action is tied to it; a person decides.
+    SLOW_MEMORY = 14 * 86400
+    SLOW_FAILS = 6
+    SLOW_DAYS = 3
+    SLOW_KEEP = 60
+
+    # sudo (2026-11-18, Part C5): a person failing sudo's password check SUDO_FAILS times within SUDO_WINDOW, or
+    # someone not allowed to use sudo trying it, is a medium finding about this machine; once per user per SUDO_COOLDOWN.
+    SUDO_FAILS = 3
+    SUDO_WINDOW = 3600
+    SUDO_COOLDOWN = 3600
+
     _FAILED_USER = re.compile(r'(?:Failed \S+ for (?:invalid user )?|Invalid user )(\S*) from')
+    # sudo's own summary line, with "sudo" in the program position right after the time and host name, so an sshd line
+    # carrying these words in a user name is never read as a sudo failure. Classic ("Nov 18 10:00:00 host") and ISO stamps.
+    _SUDO_TRIES = re.compile(r'^(?:[A-Z][a-z]{2} +\d{1,2} \d\d:\d\d:\d\d|\d{4}-\d\d-\d\dT\S+) \S+ sudo(?:\[\d+\])?: +([\w.@-]+) : '
+                             r'(?:(\d+) incorrect password attempts?|user NOT in sudoers) ;')
+    SLOW_SAVE_MAX = 5000                   # addresses kept in the saved slow-guessing memory
 
     def setup(self):
         self._seen = _BoundedSet(10000)
@@ -579,6 +603,48 @@ class AuthLogAgent(BaseAgent):
         self._recent_fails = deque(maxlen=self.SPREAD_KEEP)
         self._last_spread_alert = float('-inf')
         _resume_offset(self, '/var/log/auth.log')
+        self._load_slow()
+
+    def _load_slow(self):
+        """The slow-guessing memory spans 14 days, so it is saved (state_store) and read back after a restart."""
+        try:
+            saved = state_store.store().get(self.name_id, 'slow-fails') or {}
+            now = time.time()
+            for ip, times in (saved.get('times') or {}).items():
+                kept = [float(t) for t in times if now - float(t) <= self.SLOW_MEMORY][-self.SLOW_KEEP:]
+                if kept and normalise_ip(ip) == ip:
+                    self._slow_times[ip] = deque(kept, maxlen=self.SLOW_KEEP)
+            for ip in saved.get('told') or ():
+                if normalise_ip(ip) == ip:
+                    self._slow_told.add(ip)
+        except Exception as e:                          # noqa: BLE001 -- a bad saved state only costs the memory
+            self.log.warning(f'slow-guessing memory not restored: {e}')
+
+    def _save_slow(self):
+        if not self.__dict__.get('_slow_dirty'):
+            return
+        self._slow_dirty = False
+        now = time.time()
+        times = {ip: [t for t in ts if now - t <= self.SLOW_MEMORY] for ip, ts in list(self._slow_times.items())}
+        times = dict(list((ip, ts) for ip, ts in times.items() if ts)[-self.SLOW_SAVE_MAX:])
+        told = [ip for ip in times if ip in self._slow_told]
+        try:
+            state_store.store().put(self.name_id, 'slow-fails', {'times': times, 'told': told})
+        except Exception as e:                          # noqa: BLE001
+            self.log.warning(f'slow-guessing memory not saved: {e}')
+
+    _MEMORY = {'_counted_conn': lambda: _BoundedSet(20000), '_slow_times': lambda: _BoundedDict(10000),
+               '_slow_told': lambda: _BoundedSet(10000), '_sudo_fails': lambda: _BoundedDict(1000),
+               '_sudo_told': lambda: _BoundedDict(1000), '_pw_times': lambda: _BoundedDict(10000)}
+
+    def __getattr__(self, name):
+        """The memories added 2026-11-18 are made on first use, so an agent built without setup() (as tests do) has them."""
+        make = AuthLogAgent._MEMORY.get(name)
+        if make is None:
+            raise AttributeError(name)
+        value = make()
+        setattr(self, name, value)
+        return value
 
     def _note_failure(self, ip, now=None):
         """Remember one failed login from `ip` and return how many it has made in the last FAIL_MEMORY seconds."""
@@ -626,17 +692,109 @@ class AuthLogAgent(BaseAgent):
         """The first rule the recent failures cross, as (failures, addresses, window seconds, ' against account X' or ''),
         or None."""
         for window, min_fails, min_ips in self.SPREAD_RULES:
-            inside = [(t, i) for t, i, *_ in reversed(self.recent_window(now, window))]
-            ips = {i for _, i in inside}
-            if len(inside) >= min_fails and len(ips) >= min_ips:
+            inside = [i for _, i, *_ in self.recent_window(now, window)]
+            ips = set(inside)
+            if len(inside) >= min_fails and len(ips) >= min_ips and self._spread_evenly(inside):
                 return len(inside), ips, window, ''
         window, min_fails, min_ips = self.ACCOUNT_RULE
         if user and user != 'unknown':
-            mine = [e for e in self.recent_window(now, window) if len(e) > 2 and e[2] == user]
-            ips = {e[1] for e in mine}
-            if len(mine) >= min_fails and len(ips) >= min_ips:
+            mine = [e[1] for e in self.recent_window(now, window) if len(e) > 2 and e[2] == user]
+            ips = set(mine)
+            if len(mine) >= min_fails and len(ips) >= min_ips and self._spread_evenly(mine):
                 return len(mine), ips, window, f' against the account {user}'
         return None
+
+    def _spread_evenly(self, addresses):
+        """No single address made more than SPREAD_MAX_SHARE of these failures (Part C4: one noisy attacker plus a few
+        stray tries is not a distributed attack)."""
+        if not addresses:
+            return False
+        top = Counter(addresses).most_common(1)[0][1]
+        return top <= self.SPREAD_MAX_SHARE * len(addresses)
+
+    def _note_slow(self, ip, now=None):
+        """The long memory for very slow guessing: one medium 'slow-brute-force' per address when SLOW_FAILS failures
+        fall on SLOW_DAYS+ different days within SLOW_MEMORY, and the address never reached the 48-hour alarm."""
+        if ip == 'unknown' or _is_private_ip(ip):
+            return                                   # a person on the home network mistyping over two weeks is not this
+        now = time.time() if now is None else now
+        times = self._slow_times.get(ip)
+        if times is None:
+            times = deque(maxlen=self.SLOW_KEEP)
+            self._slow_times[ip] = times
+        while times and now - times[0] > self.SLOW_MEMORY:
+            times.popleft()
+        times.append(now)
+        self._slow_dirty = True
+        if ip in self._slow_told or len(times) < self.SLOW_FAILS:
+            return
+        days = {int(t // 86400) for t in times}
+        if len(days) < self.SLOW_DAYS or self._recent_failures(ip, now) >= 5:
+            return                                   # a burst, which the 48-hour alarm already reports
+        self._slow_told.add(ip)
+        self._submit(
+            url=ip,
+            threat_type='slow-brute-force',
+            severity='medium',
+            description=(f'Slow SSH guessing from {ip}: {len(times)} failed logins spread over {len(days)} days in the '
+                         f'last {self.SLOW_MEMORY // 86400} days, too far apart for the 48-hour alarm'),
+            detected_by=self.name_id,
+        )
+
+    def _note_sudo(self, line, now=None):
+        """sudo's own summary lines: 'alice : 3 incorrect password attempts ; ...' and 'bob : user NOT in sudoers ; ...'."""
+        m = self._SUDO_TRIES.search(line)
+        if not m:
+            return
+        now = time.time() if now is None else now
+        user, tries = m.group(1), m.group(2)
+        if tries is None:
+            why = f'{user} tried to use sudo but is not allowed to'
+        else:
+            times = [t for t in self._sudo_fails.get(user) or [] if now - t <= self.SUDO_WINDOW]
+            times += [now] * int(tries)
+            self._sudo_fails[user] = times[-50:]
+            if len(times) < self.SUDO_FAILS:
+                return
+            why = f'{user} gave a wrong sudo password {len(times)} times in the last hour'
+        last = self._sudo_told.get(user)
+        if last is not None and now - last < self.SUDO_COOLDOWN:
+            return
+        self._sudo_told[user] = now
+        self._submit(
+            url=f'sudo://{user}',
+            threat_type='sudo-failure',
+            severity='medium',
+            description=f'sudo on this machine: {why} (someone may be trying to get administrator rights)',
+            detected_by=self.name_id,
+        )
+
+    def _count_failure(self, ip, user, now=None, password=True):
+        """Count one failed SSH login from `ip`: per-address alarm at 5, 20 and 50 within 48 hours, the distributed
+        rules and the slow-guessing memory. Only password guesses (`password`) count toward "a login after failures":
+        an admin whose key agent offers several keys, or who closes a prompt, must not look like a guessed password."""
+        if password:
+            t = time.time() if now is None else now
+            pw = self._pw_times.get(ip)
+            if pw is None:
+                pw = deque(maxlen=self.FAIL_KEEP)
+                self._pw_times[ip] = pw
+            while pw and t - pw[0] > self.FAIL_MEMORY:
+                pw.popleft()
+            pw.append(t)
+        count = self._note_failure(ip, now)
+        self._note_spread(ip, now, user)
+        self._note_slow(ip, now)
+        # alert only when the count reaches exactly 5, 20 or 50, so one address does not raise a new finding on every
+        # failed attempt (high from 20)
+        if count in (5, 20, 50):
+            self._submit(
+                url=ip,
+                threat_type='brute-force',
+                severity='high' if count >= 20 else 'medium',
+                description=f'SSH brute force from {ip} — {count} failed attempts in the last 48 hours',
+                detected_by=self.name_id,
+            )
 
     def recent_window(self, now, window):
         """The remembered failures from the last `window` seconds, newest last."""
@@ -653,7 +811,8 @@ class AuthLogAgent(BaseAgent):
         once per address and user, never for this machine itself (loopback)."""
         if ip == 'unknown' or ip.startswith('127.') or ip == '::1':
             return
-        fails = self._recent_failures(ip, now)
+        t = time.time() if now is None else now
+        fails = sum(1 for x in self._pw_times.get(ip) or () if t - x <= self.FAIL_MEMORY)     # password guesses only
         key = f'{ip}:{user}'
         if fails < self.SUCCESS_AFTER or key in self._bf_success:
             return
@@ -682,6 +841,7 @@ class AuthLogAgent(BaseAgent):
             for line in new_lines:
                 self.handle_line(line)
             _save_offset(self, log_path)
+            self._save_slow()
         except PermissionError:
             self.log.warning('No permission to read auth.log — try running as root')
 
@@ -691,21 +851,27 @@ class AuthLogAgent(BaseAgent):
         # Note: sshd writes BOTH "Invalid user" and "Failed password" for one attempt at an account that does not exist, so
         # such an attempt counts twice. Kept on purpose (owner decision, 2026-11-16): guessing names that do not exist is
         # worth the extra weight. tools/test_slow_bruteforce.py pins it.
-        if 'Failed password' in line or 'Invalid user' in line:
-            ip = ssh_source(line) or 'unknown'          # IPv4 or IPv6 (2026-11-18); ::ffff:a.b.c.d counts as a.b.c.d
-            user_match = self._FAILED_USER.search(line)
-            count = self._note_failure(ip, now)
-            self._note_spread(ip, now, user_match.group(1) if user_match else None)
-            # alert only when the count reaches exactly 5, 20 or 50, so one address does not raise a new finding on every
-            # failed attempt (high from 20)
-            if count in (5, 20, 50):
-                self._submit(
-                    url=ip,
-                    threat_type='brute-force',
-                    severity='high' if count >= 20 else 'medium',
-                    description=f'SSH brute force from {ip} — {count} failed attempts in the last 48 hours',
-                    detected_by=self.name_id,
-                )
+        if self._SUDO_TRIES.search(line):
+            self._note_sudo(line, now)
+            return
+        # Any failed method (password, publickey, keyboard-interactive ...) and, since 2026-11-18 (Part C5), a connection
+        # that gave up or hit the attempt limit before logging in: the only trace a key-only attacker leaves. A gave-up
+        # line counts once per connection, and not at all when that connection's failures were already counted.
+        failure = ssh_failure(line)
+        if failure is not None:
+            ip = failure['ip'] or 'unknown'            # IPv4 or IPv6 (2026-11-18); ::ffff:a.b.c.d counts as a.b.c.d
+            conn = f'{ip}|{failure["port"]}' if failure['port'] and ip != 'unknown' else None
+            if failure['kind'] == 'gave-up':
+                if ip == 'unknown' or conn in self._counted_conn:
+                    return
+                user = None
+            else:
+                user_match = self._FAILED_USER.search(line)
+                user = user_match.group(1) if user_match else None
+            if conn:
+                self._counted_conn.add(conn)
+            self._count_failure(ip, user, now, password=failure['password'])
+            return
         if 'Accepted publickey' in line or 'Accepted password' in line or 'Accepted keyboard-interactive' in line:
             user_match = re.search(r'for (\S+) from', line)
             ip = ssh_source(line) or 'unknown'
@@ -1026,6 +1192,34 @@ class ProcessMonitorAgent(BaseAgent):
             return bool(cls.HIDDEN_TEMP.match(script))
         return False
 
+    @classmethod
+    def hidden_temp_by_path(cls, pid, args, readlink=os.readlink):
+        """The same hidden-temp rule, from what the kernel says (2026-11-18, beta record Part C6): a program started by a
+        relative name ('./.x/run' or '.x/run' from inside /tmp) is matched by its real file (/proc/<pid>/exe), and a
+        relative script given to a shell or interpreter is matched after joining it to the process's working folder.
+        Unreadable /proc entries (another user's process when not root) give False."""
+        parts = args.split()
+        if not parts:
+            return False
+        try:
+            if cls.HIDDEN_TEMP.match(readlink(f'/proc/{pid}/exe').replace(' (deleted)', '')):
+                return True
+        except OSError:
+            pass
+        exe = parts[0].rsplit('/', 1)[-1].lower()
+        candidates = [] if parts[0].startswith('/') else [parts[0]]
+        if cls.INTERPRETERS.match(exe) or exe in cls.SHELLS:
+            script = next((p for p in parts[1:] if not p.startswith('-')), '')
+            if script and not script.startswith('/'):
+                candidates.append(script)
+        if not candidates:
+            return False
+        try:
+            cwd = readlink(f'/proc/{pid}/cwd').replace(' (deleted)', '')
+        except OSError:
+            return False
+        return any(cls.HIDDEN_TEMP.match(os.path.normpath(os.path.join(cwd, c))) for c in candidates)
+
     @staticmethod
     def impersonates_kernel(pid, ppid, args):
         """A process that names itself like a kernel thread ("[kworker/0:1]") but is not one: real kernel threads are
@@ -1076,6 +1270,8 @@ class ProcessMonitorAgent(BaseAgent):
                 pattern = self.classify(args)
                 if not pattern and self.impersonates_kernel(pid, ppid, args):
                     pattern = 'fake-kernel-thread'
+                if not pattern and self.hidden_temp_by_path(pid, args):
+                    pattern = 'hidden-temp-program'
                 if not pattern and cpu.isdigit() and self.cpu_pinned(pid, int(cpu), now):
                     path = self.program_path(pid, args)
                     if path.startswith(self.TEMP_DIRS):
@@ -1948,6 +2144,26 @@ class HostHealthAgent(BaseAgent):
     # deploy to app.py, or an edit during an ssai-agents restart) are still reported once.
     BASELINE_PATH = os.path.join(ssai_config.BACKEND_DIR, 'instance', 'file_integrity_baseline.json')
 
+    # Persistence locations (2026-11-18, beta record Part C3): places an intruder writes to come back after a reboot or
+    # log-in. Each entry is (file or folder, severity). A folder is watched for files added, changed or removed; a file
+    # that does not exist yet (ld.so.preload, a person's authorized_keys) is reported when it appears. A location seen
+    # for the first time is recorded silently, so a fresh install or a new home folder does not raise a flood.
+    PERSIST_FILES = (('/etc/ld.so.preload', 'high'), ('/etc/crontab', 'medium'), ('/etc/environment', 'medium'),
+                     ('/etc/profile', 'medium'), ('/etc/bash.bashrc', 'medium'), ('/etc/rc.local', 'medium'))
+    PERSIST_DIRS = (('/etc/sudoers.d', 'high'), ('/etc/pam.d', 'high'), ('/var/spool/cron/crontabs', 'medium'),
+                    ('/etc/cron.d', 'medium'), ('/etc/cron.hourly', 'medium'), ('/etc/cron.daily', 'medium'),
+                    ('/etc/cron.weekly', 'medium'), ('/etc/cron.monthly', 'medium'), ('/etc/systemd/system', 'medium'),
+                    ('/etc/profile.d', 'medium'), ('/etc/update-motd.d', 'medium'))
+    # Inside each person's home folder (and /root). A person editing their own shell start-up file is ordinary, so
+    # those are low; a new login key is high.
+    HOME_FILES = (('.ssh/authorized_keys', 'high'), ('.ssh/authorized_keys2', 'high'), ('.bashrc', 'low'),
+                  ('.profile', 'low'), ('.bash_profile', 'low'), ('.bash_login', 'low'), ('.zshrc', 'low'))
+    HOME_DIRS = (('.config/autostart', 'medium'), ('.config/systemd/user', 'medium'))
+    # A change here is never put down to a package install: packages do not ship these.
+    NEVER_PACKAGE = ('/etc/ld.so.preload', '/var/spool/cron/crontabs', '/.ssh/')
+    PERSIST_MAX_FILES = 3000
+    PERSIST_DEPTH = 2                      # /etc/systemd/system/<x>.wants/<unit>
+
     def _load_baseline(self):
         """Read the saved file fingerprints from disk. Returns (fingerprints by path, set of paths known to be
         missing). A missing or unreadable file gives empty results, which just means the files are baselined again."""
@@ -1960,6 +2176,10 @@ class HostHealthAgent(BaseAgent):
             # first check then falls back to comparing size, time, owner and mode, exactly as before.
             self._hashes = {p: h for p, h in (raw.get('hashes') or {}).items() if isinstance(h, str)}
             self._snaps = {p: s for p, s in (raw.get('snaps') or {}).items() if isinstance(s, dict)}
+            persist = raw.get('persist') or {}
+            self._p_state = {p: (tuple(v[0]), v[1]) for p, v in (persist.get('files') or {}).items()
+                             if isinstance(v, list) and len(v) == 2 and isinstance(v[0], list) and len(v[0]) == 6}
+            self._p_locs = {loc for loc in persist.get('locations') or () if isinstance(loc, str)}
             return sigs, set(raw.get('gone', []))
         except FileNotFoundError:
             return {}, set()
@@ -1977,7 +2197,9 @@ class HostHealthAgent(BaseAgent):
                 json.dump({'sigs': {p: list(sig) for p, sig in self._sigs.items()},
                            'gone': sorted(self._gone),
                            'hashes': {p: h for p, h in self._hashes.items() if h},
-                           'snaps': self._snaps}, f)
+                           'snaps': self._snaps,
+                           'persist': {'files': {p: [list(sig), h] for p, (sig, h) in self._p_state.items()},
+                                       'locations': sorted(self._p_locs)}}, f)
             os.chmod(tmp, 0o600)
             os.replace(tmp, self.BASELINE_PATH)
         except OSError as e:
@@ -2000,6 +2222,7 @@ class HostHealthAgent(BaseAgent):
         self._told_no_systemd = False
         self._slow_due = 0.0
         self._hashes, self._snaps = {}, {}
+        self._p_state, self._p_locs = {}, set()
         saved_sigs, saved_gone = self._load_baseline()
         self._sigs = {}
         self._from_disk = set()
@@ -2090,7 +2313,8 @@ class HostHealthAgent(BaseAgent):
         now = time.monotonic()
         if now >= self._slow_due:
             self._slow_due = now + self.SLOW_EVERY - 5
-            checks += [('disk', self._check_disk), ('file-integrity', self._check_files)]
+            checks += [('disk', self._check_disk), ('file-integrity', self._check_files),
+                       ('persistence', self._check_persistence)]
         for label, check in checks:
             try:
                 check()
@@ -2178,6 +2402,160 @@ class HostHealthAgent(BaseAgent):
         if changed:
             self._remember_content(p, new_hash)
         return changed
+
+    # ── persistence locations ──
+
+    @staticmethod
+    def _homes():
+        """/root and the home folder of each person who can log in (uid 1000 or more, a real shell)."""
+        homes = ['/root']
+        try:
+            with open('/etc/passwd', errors='replace') as f:
+                for line in f:
+                    parts = line.rstrip('\n').split(':')
+                    if len(parts) < 7 or not parts[2].isdigit() or int(parts[2]) <= change_evidence.SYSTEM_ID_MAX:
+                        continue
+                    if parts[6] in change_evidence.NOLOGIN_SHELLS or not parts[5].startswith('/'):
+                        continue
+                    if parts[5] not in homes:
+                        homes.append(parts[5])
+        except OSError:
+            pass
+        return homes
+
+    def _persist_locations(self):
+        """[(location, severity, is_folder)] for this machine right now."""
+        locs = [(p, sev, False) for p, sev in self.PERSIST_FILES] + [(p, sev, True) for p, sev in self.PERSIST_DIRS]
+        for home in self._homes():
+            locs += [(os.path.join(home, rel), sev, False) for rel, sev in self.HOME_FILES]
+            locs += [(os.path.join(home, rel), sev, True) for rel, sev in self.HOME_DIRS]
+        return locs
+
+    def _files_under(self, folder, depth=None):
+        """Regular files and links under `folder`, at most PERSIST_DEPTH levels down. A folder that is missing or cannot
+        be read gives nothing."""
+        depth = self.PERSIST_DEPTH if depth is None else depth
+        out = []
+        try:
+            entries = sorted(os.scandir(folder), key=lambda e: e.name)
+        except OSError:
+            return out
+        for e in entries:
+            try:
+                if e.is_dir(follow_symlinks=False):
+                    if depth > 1:
+                        out += self._files_under(e.path, depth - 1)
+                elif e.is_file() or e.is_symlink():
+                    out.append(e.path)
+            except OSError:
+                continue
+        return out
+
+    def _persist_sig(self, p):
+        """(signature, content hash) of one file, or None when it is gone or cannot be read. A link is described by
+        itself (lstat) plus where it points, so pointing an enabled unit somewhere else counts as a change."""
+        try:
+            st = os.lstat(p)
+        except OSError:
+            return None
+        if os.path.islink(p):
+            try:
+                return self._signature(st), 'link:' + os.readlink(p)
+            except OSError:
+                return None
+        return self._signature(st), self._content_hash(p)
+
+    def _package_owns(self, p):
+        """True when the package manager owns `p` (or, for a link, the file it points to)."""
+        target = os.path.realpath(p) if os.path.islink(p) else p
+        if shutil.which('dpkg-query') is None:
+            return False
+        try:
+            r = subprocess.run(['dpkg-query', '-S', target], capture_output=True, text=True, timeout=5)
+            return r.returncode == 0
+        except (OSError, subprocess.SubprocessError):
+            return False
+
+    @staticmethod
+    def _ctime(p):
+        """When the file was last written or put in place. Not the modification time: dpkg keeps the time from the
+        package archive, so a file installed today can carry a date months old."""
+        try:
+            return os.lstat(p).st_ctime
+        except OSError:
+            return None
+
+    def _package_explains(self, p, changed_at):
+        """A package install or upgrade ran within change_evidence.WINDOW of the change (`changed_at`, the file's ctime),
+        and the file is the package's own. Never for NEVER_PACKAGE locations."""
+        if any(mark in p for mark in self.NEVER_PACKAGE):
+            return False
+        when = datetime.fromtimestamp(changed_at).astimezone()
+        try:
+            ran = change_evidence.evidence(self._evidence_lines(), when, {})['package']
+        except Exception:
+            return False
+        return bool(ran) and self._package_owns(p)
+
+    def _check_persistence(self):
+        """Report files added, changed or removed in the persistence locations. Only the location's own severity is
+        used, raised to high for a mode or owner change of a medium one."""
+        locations = self._persist_locations()
+        before = dict(self._p_state)
+        seen_files = set()
+        reports = []
+        new_locs = []
+        capped = False
+        for loc, sev, is_folder in locations:
+            files = self._files_under(loc) if is_folder else ([loc] if os.path.lexists(loc) else [])
+            first_time = loc not in self._p_locs
+            if first_time:
+                new_locs.append(loc)
+            for p in files:
+                if len(seen_files) >= self.PERSIST_MAX_FILES:
+                    capped = True
+                    break
+                seen_files.add(p)
+                now_sig = self._persist_sig(p)
+                if now_sig is None:
+                    continue                                # unreadable just now: keep what was known
+                old = self._p_state.get(p)
+                self._p_state[p] = now_sig
+                if first_time:
+                    continue
+                if old is None:
+                    reports.append((p, sev, f'New file in a start-up location ({loc}): {p}', self._ctime(p)))
+                    continue
+                fields = self._changed_fields(old[0], now_sig[0])
+                owner_or_mode = [f for f in fields if f in ('mode', 'owner', 'group')]
+                if owner_or_mode:
+                    reports.append((p, 'high' if sev == 'medium' else sev,
+                                    f'Start-up file {p}: {", ".join(owner_or_mode)} changed', None))
+                elif old[1] and now_sig[1]:
+                    if old[1] != now_sig[1]:
+                        reports.append((p, sev, f'Start-up file changed: {p}', self._ctime(p)))
+                elif 'mtime' in fields or 'size' in fields:          # no hash to compare (too big or unreadable)
+                    reports.append((p, sev, f'Start-up file modified: {p} ({", ".join(fields)} changed)',
+                                    self._ctime(p)))
+        severity_of = {loc: sev for loc, sev, _ in locations}
+        for p in [] if capped else [p for p in self._p_state if p not in seen_files]:
+            matches = [loc for loc in severity_of if p == loc or p.startswith(loc.rstrip('/') + '/')]
+            loc = max(matches, key=len) if matches else None
+            if loc is None or loc in new_locs:
+                continue                                    # its home folder went away, or not watched any more
+            del self._p_state[p]
+            sev = severity_of[loc]
+            reports.append((p, 'medium' if sev == 'high' else sev, f'File removed from a start-up location ({loc}): {p}',
+                            None))
+        self._p_locs |= set(new_locs)
+        for p, sev, text, mtime in reports:
+            if mtime is not None and self._package_explains(p, mtime):
+                self.log.info(f'FileIntegrity: {p} changed during a package install and belongs to a package; not reported')
+                continue
+            self._submit(url=p, threat_type='persistence-change', severity=sev, description=text,
+                         detected_by=self.name_id)
+        if reports or new_locs or self._p_state != before:
+            self._save_baseline()
 
     def _check_services(self):
         """Ask systemd whether each watched service is active and report one that was active on the previous scan and

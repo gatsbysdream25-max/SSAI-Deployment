@@ -20,6 +20,9 @@ import app as appmod  # noqa: E402
 import remediation as R  # noqa: E402
 import remediation_queue as RQ  # noqa: E402
 from models import db, Threat, PendingRemediation  # noqa: E402
+import ssai_config  # noqa: E402
+
+ssai_config.INSTANCE_DIR = os.path.join(_TMP, 'instance')    # alerts and undo-failure counts stay in the throwaway folder
 
 
 def malicious(confidence=90, ai_count=3, severity='CRITICAL', agreement=1.0, sources=None):
@@ -209,6 +212,14 @@ class Sweep(Base):
         self.assertEqual(result['rolled_back'], 0)
         self.assertEqual(len(result['errors']), 1)
         self.assertEqual(PendingRemediation.query.get(row.id).status, 'approved')
+        # a person hears about it after the third failure in a row, once
+        import alerts
+        for _ in range(3):
+            RQ.sweep(run=fail_run)
+        self.assertEqual([a['kind'] for a in alerts.open_alerts()], ['undo-failed'])
+        RQ.sweep(run=fake_run_ok)
+        self.assertEqual(PendingRemediation.query.get(row.id).status, 'rolled_back')
+        self.assertNotIn(f'queue:{row.id}', alerts._read_undo_failures())
 
 
 if __name__ == '__main__':

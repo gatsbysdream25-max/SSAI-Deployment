@@ -1,5 +1,74 @@
 # Changelog
 
+## 2026-11-18 (v0.1.10): accurate dashboard numbers, Gmail extension, Week 3 quality fixes
+
+### Dashboard numbers
+- The tiles (Critical, High, Medium, Low, Total, AI Analyzed) show the hub's real totals. They counted the downloaded list,
+  which holds only the newest 300 findings, so Total and AI Analyzed stopped at 300 (one hub: 5,684 stored, all analyzed).
+- **Every open finding is sent to the page**, not only the newest 300: open findings older than that were never shown, so the
+  dashboard could say "All clear" with open findings in the database (one hub had 16 from May). "Total" is now "Total stored".
+- Settings, Add a machine: a new code is shown in three separate blocks with Copy buttons: **browser extension** (hub
+  address and code only), Linux computer, Windows PC. People were pasting the Linux install command into the extension.
+
+### Gmail extension (SwarmSentinel Shield 1.1.0)
+- The scanner reads each **opened** message and the real link behind every link (including Gmail's google.com/url rewrites).
+  It used to look for the text inside Gmail's subject heading and could skip every message.
+- New signals: link text that shows another site, a sender name claiming a brand from another domain, look-alike (punycode)
+  links, Gmail's Spam folder. It looks only right after the person acts (opens, clicks, presses a key).
+- **A message Gmail already put in Spam** is one low record stored as **resolved** ("already handled by Gmail's spam
+  filter"): no alert, no AI vote. Hub side: `HANDLED_ELSEWHERE` in `routes/threats.py`, exact (type, handled_by) pairs only.
+- **A click on a link inside a risky message** (warning signs, or in Spam) is `phishing-link-clicked`, high, open. A click in
+  an ordinary message is never reported. Reports without a link host are grouped by their signals, not all merged into one.
+
+### Week 3 quality fixes
+- Preflight logs in to Pi-hole instead of only checking that its settings exist.
+- A block that fails to undo 3 times in a row raises one alert (automatic responses and the approval queue).
+- Stored verdicts record each vote's model family, judged by this hub's own model list; incident reports show them.
+- Audit O-1: an Ollama server is never guessed at the router's address unless `SSAI_OLLAMA_DISCOVER=1`.
+- Personal data is masked for cloud models and the public ledger: card numbers (Luhn), US Social Security numbers, phone
+  numbers.
+- `docs/code-map.md` lists the modules added since 15 November.
+
+## 2026-11-18 (v0.1.10): detection gaps from the beta record
+
+The open problems listed in the 15 November beta-test record (Part C), except those already fixed (pause logged "failed",
+firewall warning, IPv6 attackers). Detection only: no new automatic action, and the three new finding types are never acted
+on automatically.
+
+- **Start-up locations are watched** (`persistence-change`): files added, changed or removed in sudoers.d, pam.d, cron
+  (crontab, cron.d, cron.hourly/daily/weekly/monthly, users' crontabs), /etc/systemd/system (enabled units included), profile.d,
+  update-motd.d, /etc/profile, bash.bashrc, environment, rc.local, and a new /etc/ld.so.preload; in /root and each person's home
+  folder, authorized_keys (high), autostart and user systemd units, and shell start-up files (low: people edit their own).
+  A location seen for the first time is recorded silently. A change made during a package install to a file that package owns
+  is logged, not reported; never for ld.so.preload, crontabs or login keys. The install is matched on the file's change time
+  (ctime), because dpkg keeps the archive's months-old modification time. The baseline file keeps the new state.
+- **SSH log:** failures by any method are counted (publickey, keyboard-interactive, none, hostbased), and so are connections
+  that gave up or hit the attempt limit before logging in (`Connection closed by authenticating user ... [preauth]`,
+  `maximum authentication attempts exceeded`), once per connection, so a key-only attacker is no longer invisible and a
+  password attempt is not counted twice. Unchanged: an unknown user name still counts twice.
+  One reader (`agent_util.ssh_failure`) serves the agent and the direct checks, so a brute-force finding raised from key or
+  gave-up lines is confirmed by the direct check too. The address is always the last `<address> port <n>` sshd wrote, so a
+  user name with spaces, a fake address or the words "Failed password" cannot plant an address or hide a failure.
+  Only password guesses count toward "a login after failures" (critical): an admin whose key agent offers several keys is
+  not told their password was guessed.
+- **sudo** (`sudo-failure`, medium): 3 wrong sudo passwords for one account within an hour, or an account not allowed to use
+  sudo trying it. Once per account per hour. Read only from sudo's own lines (program name in the syslog position), so an
+  sshd line cannot forge one.
+- **No false "distributed" alarm from one loud attacker:** the distributed rules now count only when no single address made
+  more than half the failures in the window. That address still gets its own brute-force alarm.
+- **Very slow guessing** (`slow-brute-force`, medium): 6 failures from one outside address on 3 or more different days within
+  14 days, which never reach 5 inside 48 hours. Once per address; addresses inside the network are left out. This memory is
+  saved (state store) after each read of auth.log, so a restart does not reset it.
+- **Hidden-folder rule:** a program started by a relative name (`./.x/run` from inside /tmp) or a relative script given to a
+  shell or interpreter is now matched through `/proc/<pid>/exe` and the process's working folder.
+- **Injection scanner:** Unicode tag characters (invisible text some models read) are decoded and flagged as hidden;
+  invisible operators too. Hidden characters and soft hyphens are removed before matching (`i<zero-width>gnore`); a soft
+  hyphen alone is not flagged (ordinary HTML mail has them). Base32, ROT47 and text encoded twice (base64 of base64) are
+  decoded, and base64 right after `=` (`payload=...`) is now decoded too (it was skipped before). Japanese, Korean and Arabic rules, and common paraphrases ("pay no
+  attention to the previous instructions", "from now on you will"). A paraphrase in new words can still get past a pattern.
+- Dashboard labels and "What this could be?" help for the three new finding types.
+- Still open from that list: item 7 (shell and miner command lines the record does not name).
+
 ## 2026-11-18 (v0.1.9)
 
 ### IPv6 everywhere an address is read

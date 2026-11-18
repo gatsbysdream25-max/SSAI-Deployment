@@ -131,6 +131,17 @@ class Families(unittest.TestCase):
         forged = verdict(agree=('Llama', 'Hermes'), models={'Llama': 'claude-x', 'Hermes': 'gpt-5'})
         self.assertEqual(R.agreeing_families(forged, VOTERS), {'meta-llama'})
 
+    def test_the_stored_verdict_records_each_votes_family_from_this_hub(self):
+        v = verdict(agree=('Llama', 'Hermes', 'Mistral', 'Off'))
+        v['positions'][0]['family'] = 'anthropic'                     # whatever the verdict claims is overwritten
+        v['families_agreeing'] = ['forged']
+        out = R.annotate(v, VOTERS)
+        self.assertIs(out, v)
+        self.assertEqual({p['ai']: p['family'] for p in v['positions']},
+                         {'Llama': 'meta-llama', 'Hermes': 'meta-llama', 'Mistral': 'mistral', 'Off': None, 'Gemma': 'google'})
+        self.assertEqual(v['families_agreeing'], ['meta-llama', 'mistral'])
+        self.assertEqual(R.annotate('not a dict', VOTERS), 'not a dict')
+
     def test_only_malicious_votes_count(self):
         v = verdict(agree=('Llama',))
         v['positions'].append({'ai': 'Mistral', 'verdict': 'suspicious'})
@@ -484,6 +495,9 @@ class Routes(Base):
         self.assertEqual(r.status_code, 200)
         rows = AutoAction.query.filter_by(threat_id=t.id).all()
         self.assertEqual([(x.status, x.action) for x in rows], [('would-have', 'block-bad-ip')])
+        import json
+        stored = json.loads(db.session.get(Threat, t.id).ai_verdict)['consensus']
+        self.assertEqual(stored['families_agreeing'], ['meta-llama', 'mistral'])      # the record of who agreed
 
     def test_preflight_reports_an_inactive_firewall_and_missing_pihole(self):
         from routes import auto_response as RT
@@ -494,10 +508,34 @@ class Routes(Base):
         self.assertIn('switched off', out['ufw']['detail'])
         self.assertFalse(out['pihole']['ok'])
         on = lambda cmd, **kw: types.SimpleNamespace(returncode=0, stdout='Status: active\n', stderr='')  # noqa: E731
+        answering = types.SimpleNamespace(check=lambda: (True, 'Pi-hole at 198.51.100.53 answers and accepts the login'))
         with mock.patch.dict(os.environ, {'PIHOLE_IP': '198.51.100.53', 'PIHOLE_PASSWORD': 'x'}):
-            out = RT._preflight(run=on)
+            out = RT._preflight(run=on, pihole=answering)
         self.assertTrue(out['ufw']['ok'] and out['pihole']['ok'])
         self.assertEqual(self.c.get('/api/auto/preflight').status_code, 401)
+
+    def test_preflight_says_when_a_configured_pihole_does_not_answer(self):
+        # 2026-11-18: PIHOLE_IP was set, but nothing listened there any more; "configured" must not read as "working"
+        from routes import auto_response as RT
+        import remediation
+        on = lambda cmd, **kw: types.SimpleNamespace(returncode=0, stdout='Status: active\n', stderr='')  # noqa: E731
+
+        class Refused:
+            def post(self, *a, **k):
+                import requests
+                raise requests.exceptions.ConnectionError('connection refused')
+        with mock.patch.dict(os.environ, {'PIHOLE_IP': '198.51.100.53:8080', 'PIHOLE_PASSWORD': 'x'}):
+            out = RT._preflight(run=on, pihole=remediation.PiHole(http=Refused()))
+        self.assertFalse(out['pihole']['ok'])
+        self.assertIn('could not reach Pi-hole', out['pihole']['detail'])
+
+        class WrongPassword:
+            def post(self, *a, **k):
+                return types.SimpleNamespace(status_code=401, json=lambda: {'session': {'valid': False}})
+        with mock.patch.dict(os.environ, {'PIHOLE_IP': '198.51.100.53', 'PIHOLE_PASSWORD': 'x'}):
+            out = RT._preflight(run=on, pihole=remediation.PiHole(http=WrongPassword()))
+        self.assertFalse(out['pihole']['ok'])
+        self.assertIn('PIHOLE_PASSWORD', out['pihole']['detail'])
 
 
 if __name__ == '__main__':

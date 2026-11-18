@@ -15,6 +15,9 @@ def _check_auth():
     return is_admin()
 
 _VALID_SEVERITIES = {'info', 'low', 'medium', 'high', 'critical'}
+# Findings another trusted service has ALREADY dealt with (2026-11-18). A report saying so is stored as low and resolved: a
+# record, not an alert, and no AI vote. Only these exact pairs; anything else in `handled_by` is ignored.
+HANDLED_ELSEWHERE = {('phishing-email', 'gmail-spam'): "Gmail's spam filter"}
 
 # Threat types that represent an ongoing *condition* (still true on rescan)
 # rather than a distinct *event* (happened at this moment) — only these are
@@ -43,11 +46,19 @@ def _threat_from_data(data):
     severity = normalize_severity(raw_sev)
     if severity not in _VALID_SEVERITIES:
         severity = 'medium'        # Week 2: not low, the only severity acted on when a finding arrives
+    kind = _as_text(data.get('type'))
+    description = _as_text(data.get('description'))
+    status = 'active'
+    handled = HANDLED_ELSEWHERE.get((kind, _as_text(data.get('handled_by')) or ''))
+    if handled:
+        severity, status = 'low', 'resolved'
+        description = f'Already handled by {handled}; no action needed. ' + (description or '')
     return Threat(
         url         = _as_text(data.get('url')),
-        type        = _as_text(data.get('type')),
+        type        = kind,
         severity    = severity,
-        description = _as_text(data.get('description')),
+        status      = status,
+        description = description,
         detected_by = _as_text(data.get('detected_by') or data.get('agentId', 'extension')),
         real_source = (_as_text(data.get('real_url')) or '')[:500] or None,
         node_id     = (_as_text(data.get('node_id')) or '')[:200] or None,
@@ -326,6 +337,9 @@ def update_threat(id):
     if 'ai_verdict' in data:
         import json as _j
         verdict_data = data['ai_verdict']
+        if isinstance(verdict_data, dict) and isinstance(verdict_data.get('consensus'), dict):
+            import action_risk                     # each vote's model family, from this hub's registry (Week 3 record)
+            action_risk.annotate(verdict_data['consensus'])
         threat.ai_verdict  = _j.dumps(verdict_data) if isinstance(verdict_data, dict) else verdict_data
         threat.ai_analyzed = True
         if isinstance(verdict_data, dict):

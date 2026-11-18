@@ -857,6 +857,7 @@ def _snapshot_counts():
         'sev_counts': sev_counts,
         'total_threats': sum(sev_counts.values()),
         'ai_analyzed': Threat.query.filter_by(ai_analyzed=True).count(),
+        'open_threats': Threat.query.filter(Threat.status == 'active').count(),
         'active_node_count': node_agg[0] or 0,
         'total_ai_from_nodes': node_agg[1] or 0,
         'swarm_total': Agent.query.filter(Agent.status != 'disabled').count(),
@@ -989,10 +990,21 @@ def _snapshot_provider_health():
     return {}
 
 
+SNAPSHOT_NEWEST = 300        # the newest findings the dashboard list shows
+SNAPSHOT_MAX_OPEN = 1000     # plus every OPEN finding, however old, up to this many
+
+
 def _snapshot_threats():
-    """The newest 300 findings and a short fingerprint of them, so the page can skip re-downloading an unchanged list."""
+    """The newest SNAPSHOT_NEWEST findings plus every open one (up to SNAPSHOT_MAX_OPEN), newest first, and a short
+    fingerprint of them so the page can skip re-downloading an unchanged list. 2026-11-18: open findings older than the
+    newest 300 used to be left out, so the dashboard said "all clear" while 16 findings from May were still open on the hub."""
     import json as _json2
-    threats = [t.to_dict() for t in Threat.query.order_by(Threat.timestamp.desc()).limit(300).all()]
+    rows = Threat.query.order_by(Threat.timestamp.desc()).limit(SNAPSHOT_NEWEST).all()
+    have = {t.id for t in rows}
+    rows += [t for t in (Threat.query.filter(Threat.status == 'active').order_by(Threat.timestamp.desc())
+                         .limit(SNAPSHOT_MAX_OPEN).all()) if t.id not in have]
+    rows.sort(key=lambda t: (t.timestamp is not None, t.timestamp or 0, t.id), reverse=True)
+    threats = [t.to_dict() for t in rows]
     version = hashlib.sha256(_json2.dumps(threats, sort_keys=True, default=str).encode()).hexdigest()[:16]
     return threats, version
 
@@ -1034,6 +1046,7 @@ def dashboard_snapshot():
                 'INFO':     sev_counts.get('info', 0),
             },
             'ai_analyzed': counts['ai_analyzed'],
+            'open_threats': counts['open_threats'],
             'swarm': {'instance_count': counts['active_node_count'], 'swarm_total': counts['swarm_total']},
             'ai_swarm': {'active_count': counts['total_ai_from_nodes']},
         },

@@ -122,6 +122,25 @@ def agreeing_families(consensus: dict, voters: Optional[dict] = None) -> set:
     return families
 
 
+def annotate(consensus, voters: Optional[dict] = None):
+    """Record, on the stored verdict, which model family each vote came from as judged by THIS hub's registry (Week 3:
+    correlated-failure record). Each position gets `family` (None when the model is unknown or switched off here, which also
+    means it does not count) and the consensus gets `families_agreeing`. Anything the verdict itself said about families is
+    overwritten, never believed. Returns the same dict; never raises."""
+    if not isinstance(consensus, dict):
+        return consensus
+    try:
+        voters = _hub_voters() if voters is None else voters
+        for pos in consensus.get("positions") or []:
+            if isinstance(pos, dict):
+                model, on = voters.get(str(pos.get("ai") or ""), (None, False))
+                pos["family"] = family_of(model) if on else None
+        consensus["families_agreeing"] = sorted(agreeing_families(consensus, voters))
+    except Exception:                                      # noqa: BLE001 -- a record, never a reason to lose the verdict
+        consensus.pop("families_agreeing", None)
+    return consensus
+
+
 def full_consensus(consensus, std=None, voters: Optional[dict] = None) -> Tuple[bool, str]:
     """(True, '') when the verdict meets the agreement standard, else (False, the first reason it does not)."""
     if not isinstance(consensus, dict):

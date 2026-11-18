@@ -22,7 +22,7 @@ import zipfile
 HERE = os.path.dirname(os.path.abspath(__file__))
 SRC = os.path.join(HERE, "src")
 DIST = os.path.join(HERE, "dist")
-VERSION = "1.0.0"
+VERSION = "1.1.0"
 BROWSERS = {"chrome": "Chrome", "brave": "Brave", "edge": "Edge", "firefox": "Firefox"}
 FILES = ("background.js", "content-gmail.js", "popup.html", "popup.js")
 FORBIDDEN = (re.compile(r"__SSAI_API_KEY__"), re.compile(r"X-API-Key['\"]?\s*:\s*API_KEY"), re.compile(r"\bsk-[A-Za-z0-9_-]{20,}"),

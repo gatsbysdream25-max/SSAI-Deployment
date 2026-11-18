@@ -66,11 +66,26 @@ async function submit(data) {
   // The page cannot make this extension send anything it likes: the shape is rebuilt here from a few checked fields.
   const severity = SEVERITIES.includes(data.severity) ? data.severity : 'low';
   const flags = (Array.isArray(data.flags) ? data.flags : []).slice(0, 10).map(f => String(f).slice(0, 80));
+  // Without a link host, every report used to be "gmail-message", so the hub merged unrelated e-mails into one finding that
+  // kept the first one's signals. Now messages with the SAME signals are one finding; different signals stay apart. The
+  // label is made from the signals only (already being sent), never from the e-mail.
+  let sig = 5381;
+  for (const ch of flags.slice().sort().join('|')) sig = ((sig * 33) ^ ch.charCodeAt(0)) >>> 0;
+  // kind: 'spam' (already in Gmail's Spam folder: the hub stores a low, resolved record), 'click' (a link was clicked in a
+  // risky message: high, open), anything else = 'open' (warning signs in an opened message).
+  const kind = ['spam', 'click'].includes(data.kind) ? data.kind : 'open';
+  const words = {
+    spam: "Phishing or spam e-mail already caught by Gmail's spam filter. Signals: ",
+    click: 'A link was clicked in an e-mail that looks like phishing. Signals: ',
+    open: 'Possible phishing e-mail seen in the browser. Signals: ',
+  };
   const body = {
-    url: String(data.host ? 'https://' + String(data.host).slice(0, 200) + '/' : 'gmail-message').slice(0, 300),
-    type: 'phishing-email', severity,
-    description: 'Possible phishing e-mail seen in the browser. Signals: ' + (flags.join(', ') || 'none'),
+    url: String(data.host ? 'https://' + String(data.host).slice(0, 200) + '/' : 'gmail-message/' + sig.toString(16)).slice(0, 300),
+    type: kind === 'click' ? 'phishing-link-clicked' : 'phishing-email',
+    severity: kind === 'spam' ? 'low' : kind === 'click' ? 'high' : severity,
+    description: words[kind] + (flags.join(', ') || 'none'),
     detected_by: 'browser-extension-' + BROWSER,
+    handled_by: kind === 'spam' ? 'gmail-spam' : undefined,
   };
   try {
     const r = await fetch(s.apiBase + '/threats/', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-API-Key': s.token }, body: JSON.stringify(body) });

@@ -41,7 +41,7 @@ class Source(unittest.TestCase):
     def test_nothing_about_the_email_itself_is_sent(self):
         content, background = read("content-gmail.js"), read("background.js")
         send = re.search(r"sendMessage\(\{ type: 'SUBMIT_THREAT', data: \{([^}]*)\}", content).group(1)
-        self.assertEqual(sorted(x.strip() for x in send.split(",")), ["flags", "host", "severity"])   # no subject, sender or body
+        self.assertEqual(sorted(x.strip() for x in send.split(",")), ["flags", "host", "kind", "severity"])   # no subject, sender or body
         for word in ("subject", "sender", "recipient"):
             self.assertNotIn(word, re.search(r"const body = \{.*?\};", background, re.S).group(0).lower())
 
@@ -58,6 +58,28 @@ class Source(unittest.TestCase):
     def test_nothing_is_written_into_the_page_or_popup_as_html(self):
         for name in ("popup.js", "content-gmail.js"):
             self.assertNotRegex(read(name), r"innerHTML|outerHTML|insertAdjacentHTML|document\.write|eval\(", name)
+
+    def test_the_scanner_reads_opened_messages_and_the_real_links(self):
+        # 2026-11-18: it looked for message text inside Gmail's subject heading (none there) and ignored links hidden behind text
+        text = read("content-gmail.js")
+        self.assertIn("document.querySelectorAll('div.a3s')", text)
+        self.assertIn("querySelectorAll('a[href]')", text)
+        self.assertIn("realLink", text)
+
+    def test_it_looks_only_after_the_person_acts_and_spam_is_a_resolved_record(self):
+        content, background = read("content-gmail.js"), read("background.js")
+        self.assertIn("if (Date.now() - lastAction > ACTION_WINDOW_MS) return;", content)
+        self.assertIn("if (!v || !v.risky) return;", content)                     # a click in an ordinary message: nothing
+        self.assertIn("handled_by: kind === 'spam' ? 'gmail-spam' : undefined", background)
+        self.assertIn("severity: kind === 'spam' ? 'low' : kind === 'click' ? 'high' : severity", background)
+
+    def test_scoring_with_made_up_messages(self):
+        node = shutil.which("node")
+        if not node:
+            self.skipTest("Node.js is not installed here; client/browser-extension/test_scoring.js runs where it is")
+        import subprocess
+        r = subprocess.run([node, os.path.join(EXT, "test_scoring.js")], capture_output=True, text=True, timeout=60)
+        self.assertEqual(r.returncode, 0, r.stderr[-2000:])
 
 
 class Packages(unittest.TestCase):

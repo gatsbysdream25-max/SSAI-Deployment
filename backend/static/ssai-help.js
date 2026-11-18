@@ -134,6 +134,38 @@
         C('Someone using stolen credentials', 'Unknown address or unusual time.', 'Change that account\'s password and keys; check its activity.', ['last -n 20'])
       ]
     },
+    'slow-brute-force': {
+      title: 'Slow password guessing over several days',
+      summary: 'One address failed to log in a few times a day for several days, staying under the 48-hour alarm.',
+      start: 'Check whether the address is yours, and whether password sign-in is on.',
+      causes: [
+        C('A patient internet bot', 'An outside address, common user names (root, admin), at odd hours.', 'Use keys only for SSH; block the address.', ['sudo grep "{ip}" /var/log/auth.log | tail -20']),
+        C('A device of yours with an old saved password', 'The same user name every time, at regular times.', 'Update the saved password on that device.', ['sudo grep "{ip}" /var/log/auth.log | tail -20'])
+      ]
+    },
+    'sudo-failure': {
+      title: 'Failed attempts to get administrator rights',
+      summary: 'A wrong sudo password was typed several times, or an account that may not use sudo tried it.',
+      start: 'Check who it was and whether that person was at the machine.',
+      causes: [
+        C('You or another admin mistyped', 'The account is yours and the time matches.', 'Nothing to do.', []),
+        C('Someone using a stolen or shared account', 'You were not using the machine then, or the account should never need sudo.', 'Change that account\'s password; check what it did.',
+          ['sudo grep "sudo" /var/log/auth.log | tail -30', 'last -n 20']),
+        C('A script or program asking for sudo', 'It repeats on a schedule.', 'Fix the script (a sudoers rule for that one command, or no sudo at all).', ['sudo grep "sudo" /var/log/auth.log | tail -30'])
+      ]
+    },
+    'persistence-change': {
+      title: 'A start-up location changed',
+      summary: 'Something that runs automatically (cron, systemd units, sudo rules, PAM, shell start-up files, login keys or ld.so.preload) was added, changed or removed.',
+      start: 'Look at the file and find out whether a person or an update made it.',
+      causes: [
+        C('A software update or package install', 'The time matches an apt/dpkg run and the file belongs to a package.', 'Nothing to do if it looks normal.',
+          ['dpkg -S {path}', 'grep " install \\| upgrade " /var/log/dpkg.log | tail -20']),
+        C('You or an admin set it up', 'You added the cron job, unit, key or rule yourself.', 'Nothing to do; note it.', ['sudo ls -l {path}']),
+        C('An intruder making sure they come back', 'A key, job, unit or preload entry nobody added on purpose.', 'Remove it, change passwords and keys, and find how they got in.',
+          ['sudo ls -l {path}', 'sudo cat {path}', 'sudo grep "sudo:" /var/log/auth.log | tail -20'])
+      ]
+    },
     'file-modification': {
       title: 'An important system file changed',
       summary: 'A protected file (accounts, sudo rules, SSH settings, SSAI itself) changed.',

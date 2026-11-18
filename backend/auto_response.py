@@ -527,13 +527,17 @@ def sweep(audit_path: str, deps: Optional[Deps] = None, now: Optional[datetime] 
     deps = deps or Deps()
     expired, errors = 0, []
     for row in due:
+        import alerts
         try:
             _end(row, deps, "expired", "time limit", now)
             expired += 1
             remediation.audit(audit_path, action="auto-expire", auto_action=row.id, target=row.target, ok=True, by="sweep")
+            alerts.undo_succeeded(f"auto:{row.id}")
         except Exception as exc:                            # noqa: BLE001 -- tried again on the next sweep
             errors.append(f"{row.action} {row.target} (#{row.id}): {exc}")
             remediation.audit(audit_path, action="auto-expire", auto_action=row.id, target=row.target, ok=False,
                               error=str(exc)[:200], by="sweep")
+            alerts.undo_failed(f"auto:{row.id}", f"{row.kind} {row.target}", f"{type(exc).__name__}: {exc}",
+                               finding=row.threat_id)       # a person is told after a few failures in a row
     db.session.commit()
     return {"expired": expired, "errors": errors}

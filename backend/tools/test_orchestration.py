@@ -271,6 +271,21 @@ class Report(unittest.TestCase):
                      '## What this network says', '## Proposed fix', 'Block the address.', 'awaiting_approval'):
             self.assertIn(part, md)
 
+    def test_the_report_names_the_model_families_the_hub_recorded(self):
+        import copy
+        import incident_report
+        v = copy.deepcopy(self.verdict)
+        v['consensus']['positions'] = [{'ai': 'ollama', 'verdict': 'malicious', 'severity': 'HIGH', 'confidence': 90,
+                                        'family': 'meta-llama'},
+                                       {'ai': 'mistral', 'verdict': 'malicious', 'severity': 'HIGH', 'confidence': 88,
+                                        'family': 'mistral'}]
+        v['consensus']['families_agreeing'] = ['meta-llama', 'mistral']
+        md = incident_report.to_markdown(incident_report.build({'id': 6, 'type': 'x', 'ai_verdict': json.dumps(v)}))
+        self.assertIn('**ollama** (meta-llama family)', md)
+        self.assertIn('Independent model families that said malicious: meta-llama, mistral (2;', md)
+        old = incident_report.to_markdown(incident_report.build({'id': 4, 'type': 'x', 'ai_verdict': json.dumps(self.verdict)}))
+        self.assertNotIn('Independent model families', old)          # a verdict saved before the record existed: no claim
+
     def test_an_unjudged_finding_gets_a_short_honest_report(self):
         import incident_report
         md = incident_report.to_markdown(incident_report.build({'id': 5, 'type': 'x'}))

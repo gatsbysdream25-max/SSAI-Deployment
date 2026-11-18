@@ -230,7 +230,11 @@ def sweep(pihole=None, run=None, audit_path=None):
             if audit_path:
                 remediation.audit(audit_path, action="auto-rollback", proposal_id=row.id, kind=row.kind,
                                   target=row.target, ok=False, error=str(e), by="RemediationSweepAgent")
+            import alerts
+            alerts.undo_failed(f"queue:{row.id}", f"{row.kind} {row.target}", str(e), finding=row.threat_id)
             continue
+        import alerts
+        alerts.undo_succeeded(f"queue:{row.id}")
         row.status = "rolled_back"
         row.rolled_back_at = now
         threat = Threat.query.get(row.threat_id)

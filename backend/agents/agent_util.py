@@ -87,6 +87,43 @@ def ssh_source(line):
     return None
 
 
+# One reader for "an SSH login failed" (2026-11-18), shared by AuthLogAgent and the direct checks so both count the same
+# lines. Everything before the address is chosen by whoever connects (a user name may hold spaces and fake addresses), so
+# the address and port are always the LAST "<address> port <n>" on the line.
+_SSH_FAILED = re.compile(r'\bFailed (password|keyboard-interactive/pam|publickey|none|hostbased) for ')
+_SSH_GAVE_UP = re.compile(
+    r'\bsshd(?:-session)?(?:\[\d+\])?: (?:'
+    r'(?:Connection closed by|Disconnected from|Disconnecting) (?:authenticating|invalid) user (?P<u1>.*) (?P<a1>\S+) port (?P<p1>\d+)'
+    r'(?::| \[preauth\]|$)'
+    r'|error: maximum authentication attempts exceeded for (?:invalid user )?(?P<u2>.*) from (?P<a2>\S+) port (?P<p2>\d+) ssh2)')
+_SSH_PORT = re.compile(r'\bport (\d+)')
+_PASSWORD_KINDS = {'password', 'keyboard-interactive/pam', 'invalid-user'}
+
+
+def ssh_failure(line):
+    """A failed SSH login on this auth.log line, as {'ip', 'port', 'kind'}, or None.
+
+    kind: 'password' / 'keyboard-interactive/pam' / 'publickey' / 'none' / 'hostbased' (a "Failed <method>" line),
+    'invalid-user' (sshd's "Invalid user" line; with the "Failed" line that follows, an unknown name counts twice, on purpose),
+    or 'gave-up' (the connection was closed before logging in, or hit the attempt limit: the only trace a key-only attacker
+    leaves). 'password' says whether it is a guess at a password (those alone can lead to "the password may have been guessed").
+    ip is None when sshd's line has no readable address."""
+    text = str(line or '')
+    # The gave-up lines first: their wording starts right after sshd's own tag, so a user name holding "Failed password for"
+    # or "Invalid user" cannot turn one into a password failure with a planted address.
+    g = _SSH_GAVE_UP.search(text)
+    if g:
+        token, port = (g.group('a1'), g.group('p1')) if g.group('a1') is not None else (g.group('a2'), g.group('p2'))
+        return {'ip': normalise_ip(token), 'port': port, 'kind': 'gave-up', 'password': False}
+    m = _SSH_FAILED.search(text)
+    if m or 'Invalid user ' in text:
+        ports = _SSH_PORT.findall(text)
+        kind = m.group(1) if m else 'invalid-user'
+        return {'ip': ssh_source(text), 'port': ports[-1] if ports else None, 'kind': kind,
+                'password': kind in _PASSWORD_KINDS}
+    return None
+
+
 def split_host_port(endpoint):
     """An `ss` address column -> (host, port): '203.0.113.5:443', '[2001:db8::5]:443', '*:22', '[::ffff:203.0.113.5]:80' and
     the bracket-less IPv6 form older ss versions print ('2001:db8::5:443': the port is after the last colon). The host keeps

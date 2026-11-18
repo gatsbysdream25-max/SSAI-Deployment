@@ -10,7 +10,9 @@ may leave.
      for shape. Every other field is dropped, whatever it is called.
   2. Redact what is left. Credentials (known API-key formats, auth headers, passwords in URLs, sshpass / sudo -S,
      anything named like a password, token or key), IPv4 / IPv6 addresses, MAC addresses, internal hostnames and
-     domains, e-mail addresses and user home paths become stable tokens (SECRET_1, IP_1, HOST_1, MAC_1 ...): the
+     domains, e-mail addresses, user home paths and personal data (payment card numbers that pass the Luhn check, US
+     Social Security numbers, phone numbers; Week 3, 2026-11-18) become stable tokens (SECRET_1, IP_1, HOST_1, MAC_1,
+     CARD_1, SSN_1, PHONE_1 ...): the
      same value always gets the same token, so an analysis still reads sensibly. The token map lives in memory
      only and is never sent or logged. File hashes and other indicators are left alone.
   3. Log what crossed (the redacted result and counts, never an original value) to an append-only local audit log.
@@ -62,6 +64,26 @@ _LOG_USER = re.compile(
     r"(?:r?user(?:name)?|logname|acct)\s*[=:]\s*)|\bsudo:\s+)([A-Za-z_][\w.-]{0,31}\$?)(?=\s|$|[,;:)\]\"'])")
 _SYSTEM_ACCOUNTS = ("root", "nobody", "daemon", "unknown", "none", "null")
 # Threat reports write dots as [.] (.) {.} [dot] or (dot) so links cannot be clicked; this matches those so they can be turned back into real dots before looking for addresses.
+# Personal data (Week 3, 2026-11-18): a phishing log line, a pasted e-mail or a form submission can carry it. Shapes only;
+# every candidate card number must also pass the Luhn check, so random long numbers (ids, timestamps) mostly stay.
+_CARD = re.compile(r"(?<![\w.:/-])\d(?:[ -]?\d){12,18}(?![\w:/-])")
+_SSN = re.compile(r"(?<![\w.:/-])(?!000|666|9\d\d)\d{3}-(?!00)\d{2}-(?!0000)\d{4}(?![\w:/-])")
+# North American numbers: area code and exchange never start with 0 or 1, which keeps ranges like 100-200-3000 readable.
+_PHONE = re.compile(r"(?<![\w.:/+-])(?:\+1[ .-]?)?\([2-9]\d{2}\)[ .-]?[2-9]\d{2}[ .-]\d{4}(?![\w:/-])"   # (202) 555-0147
+                    r"|(?<![\w.:/+-])(?:\+1[ .-])?[2-9]\d{2}[.-][2-9]\d{2}[.-]\d{4}(?![\w.:/-])"      # 202-555-0148
+                    r"|(?<![\w+])\+\d{1,3}(?:[ .-]?\d){7,13}(?![\w:/-])")                          # +44 20 7946 0958
+
+
+def _luhn(digits: str) -> bool:
+    total = 0
+    for i, ch in enumerate(reversed(digits)):
+        n = int(ch)
+        if i % 2:
+            n = n * 2 - 9 if n > 4 else n * 2
+        total += n
+    return total % 10 == 0
+
+
 _DEFANG = re.compile(r"\s?(?:\[\.\]|\(\.\)|\{\.\}|\[dot\]|\(dot\))\s?", re.I)   # threat-report "defanged" dots
 # A host or domain name that ends in a private-network suffix such as .local or .corp (the list is _INTERNAL_SUFFIXES), e.g. printer.home.lan.
 _DOTTED_NAME = re.compile(r"\b(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+(?:%s)\b" % "|".join(_INTERNAL_SUFFIXES), re.I)
@@ -182,6 +204,12 @@ class Redactor:
         self.counts["USER"] = self.counts.get("USER", 0) + 1
         return match.group(1) + self.tokens.token("USER", user) + match.group(3)
 
+    def _card(self, match: "re.Match") -> str:
+        digits = re.sub(r"\D", "", match.group(0))
+        if not 13 <= len(digits) <= 19 or len(set(digits)) == 1 or not _luhn(digits):
+            return match.group(0)                                  # a long number that is not a card number (an id, a time)
+        return self._sub("CARD", match)
+
     def _ipv6(self, match: "re.Match") -> str:
         """Replace an IPv6 address with a token, unless it is not really an address or (ledger mode) is a public one."""
         address = match.group(0)
@@ -208,6 +236,9 @@ class Redactor:
         cleaned = _MAC.sub(lambda match: self._sub("MAC", match), cleaned)
         cleaned = _IPV6.sub(self._ipv6, cleaned)
         cleaned = _IPV4.sub(self._address, cleaned)
+        cleaned = _CARD.sub(self._card, cleaned)                   # after addresses, so an IP is never read as digits
+        cleaned = _SSN.sub(lambda match: self._sub("SSN", match), cleaned)
+        cleaned = _PHONE.sub(lambda match: self._sub("PHONE", match), cleaned)
         cleaned = _DOTTED_NAME.sub(lambda match: self._sub("HOST", match), cleaned)
         for name in self.names:                            # this network's own names, whole words, any case
             cleaned = re.sub(r"(?<![\w-])%s(?![\w-])" % re.escape(name), lambda match: self._sub("HOST", match), cleaned, flags=re.I)

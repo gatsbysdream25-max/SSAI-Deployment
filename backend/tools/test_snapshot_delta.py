@@ -7,6 +7,7 @@ import os
 import sys
 import tempfile
 import unittest
+import unittest.mock
 from datetime import datetime, timezone
 
 _TMP = tempfile.mkdtemp()
@@ -92,6 +93,36 @@ class Snapshot(unittest.TestCase):
         r2, plain = self.get()
         self.assertIsNone(r2.headers.get('Content-Encoding'))
         self.assertEqual(gz['threats_version'], plain['threats_version'])
+
+    def test_totals_are_real_and_old_open_findings_are_always_sent(self):
+        # 2026-11-18: the page counted its capped list (Total stuck at 300), and open findings older than the newest 300
+        # were never sent, so the dashboard said "all clear" with open findings in the database.
+        from datetime import timedelta
+        import app as appmod
+        with self.app.app_context():
+            old = self.Threat(url='203.0.113.77', type='brute-force', severity='high', description='old and still open',
+                              detected_by='test', status='active', timestamp=datetime.now(timezone.utc) - timedelta(days=180))
+            closed = self.Threat(url='203.0.113.78', type='brute-force', severity='low', description='old and closed',
+                                 detected_by='test', status='resolved', timestamp=datetime.now(timezone.utc) - timedelta(days=180),
+                                 ai_analyzed=True)
+            self.db.session.add_all([old, closed])
+            self.db.session.commit()
+            old_id, closed_id, total = old.id, closed.id, self.Threat.query.count()
+        try:
+            with unittest.mock.patch.object(appmod, 'SNAPSHOT_NEWEST', 5):
+                _r, s = self.get()
+            ids = [t['id'] for t in s['threats']]
+            self.assertIn(old_id, ids)                      # open, however old
+            self.assertNotIn(closed_id, ids)                # closed and old: only in the totals
+            self.assertEqual(s['summary']['total_threats'], total)
+            self.assertGreater(s['summary']['total_threats'], len(ids))
+            self.assertGreaterEqual(s['summary']['open_threats'], 41)
+            self.assertGreaterEqual(s['summary']['ai_analyzed'], 1)
+        finally:
+            with self.app.app_context():
+                for i in (old_id, closed_id):
+                    self.db.session.delete(self.db.session.get(self.Threat, i))
+                self.db.session.commit()
 
     def test_small_json_is_left_alone(self):
         r = self.c.get('/health', headers={'Accept-Encoding': 'gzip'})

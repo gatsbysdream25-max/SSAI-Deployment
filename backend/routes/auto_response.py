@@ -160,7 +160,7 @@ def ack_alert(alert_id):
 
 # ── preflight: would a block actually be enforced? ───────────────────────────
 
-def _preflight(run=None):
+def _preflight(run=None, pihole=None):
     import os
     import subprocess
     run = run or subprocess.run
@@ -179,7 +179,8 @@ def _preflight(run=None):
     except remediation.RemediationError as e:
         out["ufw"]["detail"] = str(e)[:200]
     if os.environ.get("PIHOLE_IP") and os.environ.get("PIHOLE_PASSWORD"):
-        out["pihole"] = {"ok": True, "detail": "Pi-hole is configured (PIHOLE_IP and PIHOLE_PASSWORD are set)"}
+        ok, detail = (pihole or remediation.PiHole()).check()       # log in and out: configured is not the same as working
+        out["pihole"] = {"ok": ok, "detail": detail if ok else f"{detail}, so a domain block would fail"}
     else:
         out["pihole"]["detail"] = "Pi-hole is not configured (PIHOLE_IP / PIHOLE_PASSWORD in .env), so a domain block would fail"
     return out

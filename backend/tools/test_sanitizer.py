@@ -177,6 +177,26 @@ class Gate(unittest.TestCase):
             out = self.run_gate({'sanitized_summary': text})
             self.assertNotIn(body, json.dumps(out))
 
+    def test_card_numbers_social_security_numbers_and_phone_numbers_never_cross(self):
+        # Week 3 PII masking. Test card numbers and numbers reserved for fiction only.
+        text = ('form fields: card 4111 1111 1111 1111, card 5555-5555-5555-4444, 378282246310005, ssn 219-09-9999, '
+                'call (202) 555-0147 or 202-555-0148 or +44 20 7946 0958 or +12025550149')
+        out = self.run_gate({'sanitized_summary': text})['sanitized_summary']
+        for value in ('4111 1111 1111 1111', '5555-5555-5555-4444', '378282246310005', '219-09-9999', '(202) 555-0147',
+                      '202-555-0148', '+44 20 7946 0958', '+12025550149'):
+            self.assertNotIn(value, out)
+        self.assertEqual(out.count('CARD_'), 3)
+        self.assertIn('SSN_1', out)
+        self.assertEqual(out.count('PHONE_'), 4)
+
+    def test_numbers_that_are_not_personal_data_are_kept(self):
+        for text in ('Event id 4111111111111112 at epoch 1763445600 and 1763445600123',      # fails Luhn / too short
+                     'Login at 2026-11-18 10:00:00 on port 50000, pid 4242, 5 attempts, build 10.0.26200.1',
+                     'Version 1.2.3-4 released; range 100-200-3000 is not a phone',
+                     'sha1 da39a3ee5e6b4b0d3255bfef95601890afd80709 seen 3 times'):
+            out = self.run_gate({'sanitized_summary': text})
+            self.assertEqual(out['sanitized_summary'], text, text)
+
     def test_hashes_and_ordinary_security_wording_are_kept(self):
         for text in ('sha256 e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 matched a sample',
                      'md5 d41d8cd98f00b204e9800998ecf8427e',

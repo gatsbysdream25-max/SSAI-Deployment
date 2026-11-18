@@ -847,7 +847,7 @@ document.addEventListener('keydown', (e) => { if (e.key === 'Escape') setGearMen
       <div class="sum-card"><div class="sum-num num-high" id="cnt-HIGH">0</div><div class="sum-label">High</div></div>
       <div class="sum-card"><div class="sum-num num-med" id="cnt-MEDIUM">0</div><div class="sum-label">Medium</div></div>
       <div class="sum-card"><div class="sum-num num-low" id="cnt-LOW">0</div><div class="sum-label">Low</div></div>
-      <div class="sum-card"><div class="sum-num num-info" id="cnt-total">0</div><div class="sum-label">Total</div></div>
+      <div class="sum-card"><div class="sum-num num-info" id="cnt-total">0</div><div class="sum-label">Total stored</div></div>
       <div class="sum-card"><div class="sum-num num-ai" id="cnt-ai-analyzed">0</div><div class="sum-label">AI Analyzed</div></div>
       <div class="sum-card"><div class="sum-num" id="cnt-instances" style="color:var(--accent2);">0</div><div class="sum-label">Instances</div></div>
       <div class="sum-card"><div class="sum-num" id="cnt-swarm-agents" style="color:var(--green);">0</div><div class="sum-label">Swarm Agents</div></div>
@@ -1039,6 +1039,7 @@ document.addEventListener('DOMContentLoaded', function initMode() {
 let allThreats    = [];
 let activeFilter  = 'ALL';
 let aiAnalyzedCount = 0;
+let serverTotals = null;      // the hub's real totals (summary): the list below is capped, so it must not be counted
 let ghRecentItems = [];
 
 // Home view's own state — latest snapshot fields it needs beyond allThreats,
@@ -1069,6 +1070,10 @@ setInterval(() => {
 // ═══════════════════════════════════════════════════════════════
 function handleSummary(s) {
   if (!s) return;
+  if (s.by_severity && typeof s.total_threats === 'number') {
+    serverTotals = s;
+    updateSummary();
+  }
   if (s.total_agents !== undefined) setText('local-agent-count', s.total_agents);
 
   if (s.swarm) {
@@ -1130,14 +1135,26 @@ function addOrUpdateThreat(t, isNew) {
 }
 
 function updateSummary() {
-  const c = { CRITICAL:0, HIGH:0, MEDIUM:0, LOW:0, INFO:0 };
-  allThreats.forEach(t => { const l = t.severity_label || 'INFO'; c[l in c ? l : 'INFO']++; });
+  // 2026-11-18: the tiles count EVERY stored finding from the hub's own totals. They used to count the downloaded list,
+  // which holds only the newest 300 (plus the open ones), so Total and AI Analyzed stopped at 300.
+  let c = { CRITICAL:0, HIGH:0, MEDIUM:0, LOW:0, INFO:0 }, total = allThreats.length, analyzed = aiAnalyzedCount;
+  if (serverTotals) {
+    c = Object.assign(c, serverTotals.by_severity);
+    total = serverTotals.total_threats;
+    analyzed = serverTotals.ai_analyzed;
+  } else {
+    allThreats.forEach(t => { const l = t.severity_label || 'INFO'; c[l in c ? l : 'INFO']++; });
+  }
   setText('cnt-CRITICAL', c.CRITICAL);
   setText('cnt-HIGH',     c.HIGH);
   setText('cnt-MEDIUM',   c.MEDIUM);
   setText('cnt-LOW',      c.LOW + c.INFO);
-  setText('cnt-total',    allThreats.length);
-  setText('cnt-ai-analyzed', aiAnalyzedCount);
+  setText('cnt-total',    total);
+  setText('cnt-ai-analyzed', analyzed);
+  const open = serverTotals && typeof serverTotals.open_threats === 'number' ? serverTotals.open_threats : null;
+  const totalEl = document.getElementById('cnt-total');
+  if (totalEl) totalEl.title = `${total} findings stored (open and closed)` + (open !== null ? `; ${open} open now` : '') +
+                       `; the list shows the newest ${Math.min(allThreats.length, 300)} and every open one`;
   setText('threat-badge', allThreats.length);
 }
 
@@ -1340,6 +1357,12 @@ const HOME_COPY = {
                            desc: 'Someone logged in successfully from an address that had just failed several times. The password may have been guessed: change it and check what that account did.' },
   'distributed-brute-force': { icon: '🔨', lvl: 'attention', title: 'Break-in attempts spread across many addresses',
                            desc: 'Many different addresses each tried a few passwords, staying under the usual alarm. Usually a botnet; make sure password sign-in is off or passwords are strong.' },
+  'slow-brute-force':    { icon: '🐢', lvl: 'attention', title: 'Slow password guessing over several days',
+                           desc: 'One address keeps trying to log in a few times a day, too slowly for the usual alarm. Usually a patient bot; make sure password sign-in is off or the password is strong.' },
+  'sudo-failure':        { icon: '🔑', lvl: 'attention', title: 'Someone failed to get administrator rights',
+                           desc: 'A wrong administrator (sudo) password was typed several times, or an account not allowed to use sudo tried it. Fine if it was you mistyping; otherwise check that account.' },
+  'persistence-change':  { icon: '📌', lvl: 'attention', title: 'Something changed in a start-up location',
+                           desc: 'A file that runs automatically (at start-up, on a schedule or at log-in), a sudo rule or a login key was added or changed. Confirm it was you or a normal update.' },
   'file-modification':   { icon: '📄', lvl: 'attention', title: 'An important file was changed',
                            desc: 'A protected file was modified. Worth confirming this was you or your normal update process.' },
   'suspicious-process':  { icon: '❓', lvl: 'attention', title: 'An unrecognized program is running',

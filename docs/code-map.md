@@ -19,6 +19,7 @@ Two programs run on the main machine (the **hub**): the **web app** (dashboard +
 |---|---|
 | How an AI verdict is made | `backend/agents/finding_flow.py` (the steps), `ai_swarm_agent.py` (`analyze`, then `apply_quorum_policy`), `local_evidence.py` |
 | Why nothing blocks without a person | `backend/remediation_queue.py`, then `backend/auth.py` (`approving_person`) |
+| What SSAI may do on its own (off by default) | `backend/action_risk.py` (the rules by severity), `backend/auto_response.py`, `backend/break_glass.py`, `backend/alerts.py` |
 | What leaves the machine for the cloud | `backend/sanitizer.py` and `backend/agents/usage_caps.py` |
 | How to install or move it | `deploy/README.md`, `docs/portable-and-relocation.md` |
 | How to run the tests | `python backend/tools/run_all_tests.py` |
@@ -36,7 +37,11 @@ Two programs run on the main machine (the **hub**): the **web app** (dashboard +
 | `routes/allowlist.py`, `routes/quarantine.py`, `routes/settings.py` | The port allowlist, e-mail quarantine import, and the Settings page's agent switches and AI routing |
 | `routes/threats.py` | Receive, list, update and report on findings |
 | `routes/remediation.py` | The approve / reject / block endpoints |
-| `routes/autonomy.py`, `autonomy.py` | Standing permissions: what SSAI may do without asking (none by default) |
+| `routes/autonomy.py`, `autonomy.py` | Standing permissions: what SSAI may do without asking (none by default; low and medium only) |
+| `action_risk.py` | The one table, by severity, of what may happen without a person, and the "full consensus" test (2+ independent model families, judged from this hub's own model list) |
+| `auto_response.py`, `routes/auto_response.py` | Opt-in automatic responses (block a guessing address, block a feed-listed address or domain, pause a miner or reverse shell). Off and in dry run by default; Undo, End program, Keep paused |
+| `break_glass.py` | One switch that stops every automatic action at once; only a signed-in person turns it back off |
+| `alerts.py` | Alerts a person must acknowledge (the dashboard's red bar): live automatic actions, consensus pauses, blocks that could not be undone |
 | `routes/agents.py`, `routes/status.py`, `routes/copilot.py` | Agent status, health, and the read-only door used by Microsoft Copilot/Teams |
 | `remediation.py` | Works out what a finding's indicator *is* (address, domain, file) and applies or undoes a block honestly |
 | `remediation_queue.py` | Turns a trusted verdict into a **proposal**, never an action |
@@ -54,7 +59,9 @@ Two programs run on the main machine (the **hub**): the **web app** (dashboard +
 | File | What it is for |
 |---|---|
 | `agent_runner.py` | Runs every agent on a timer. Holds the detectors (network scan, log watcher, file integrity...) **and** the `SwarmConsensusAgent` that drives the AI panel |
-| `agent_util.py` | Pure helpers the agents share: hide private addresses, scrub log lines, memory-capped set and dict. Split out of `agent_runner.py`. |
+| `agent_util.py` | Pure helpers the agents share: hide private addresses, scrub log lines, memory-capped set and dict, and the one IPv4 + IPv6 address reader (`find_ip`, `ssh_source`, `split_host_port`). Split out of `agent_runner.py`. |
+| `live_checks.py` | Direct checks: before anything acts, look at the machine again (is the process still running, the connection still open, the address still in the log or feed). Read-only |
+| `change_evidence.py` | When an account file (passwd, group, shadow) changes, finds the proof of who changed it and why (package installs, sudo lines) |
 | `ai_swarm_agent.py` | The AI panel itself: asks each model, combines the votes, applies the quorum rules |
 | `finding_flow.py` | The numbered steps one finding goes through, timed, with a time budget |
 | `local_evidence.py` | Decides *verified / partial / unverified* from this network's own records (feed hit, second detector, repeat sightings) |
@@ -69,12 +76,15 @@ Two programs run on the main machine (the **hub**): the **web app** (dashboard +
 | `intel.py` | Free threat-feed lists, matched against what this network does |
 | `redteam.py` | Attacks SSAI's own pipeline on purpose to check it holds |
 | `agent_catalog.py`, `state_store.py` | Which agents exist and are on; small shared state between agents |
-| `capability.py` | Measures the machine (memory, disk, tools, models) and says which protection level it can honestly offer: Watch, Guard, Panel or Sovereign. Shown in Settings and printed by the installer. |
+| `capability.py` | Measures the machine (memory, disk, tools, models) and says which protection level it can honestly offer: Watch, Guard, Panel or Sovereign. Shown in Settings and printed by the installer. |
+
 | `request_helpers.py` | Small functions that clean what a client sent (trim, cap the length, keep only known values) and read the clock. |
 | `ai_providers.py` | One small class per kind of AI model server (local Ollama, OpenAI-style cloud APIs, Gemini, Hugging Face, Anthropic) and the check "is this endpoint on my own network". |
 | `panel_rules.py` | The panel's pure rules: how a quorum is worded, the 40% cap on any one model's vote, outliers, and the challenge-round text. |
 | `screenshot_ai.py` | Reads a screenshot with a local vision model; never a cloud one. |
 | `redact.py` | Keeps secrets out of logs |
+
+The dashboard's "What this could be?" guides live in `backend/static/ssai-help.js`.
 
 ## Tools and tests (`backend/tools/`)
 
@@ -92,7 +102,8 @@ Two programs run on the main machine (the **hub**): the **web app** (dashboard +
 
 - Settings come from the `.env` file or `backend/instance/` (never from the code), and model names live only in `backend/config/ai_models.json`.
 - Every new module starts with a docstring saying what it is for and which design decision it came from.
-- A comment says **why**, not what; numbers have a name and a reason beside them.
+- A comment says **why**, not what; numbers have a name and a reason beside them.
+
 
 ## Why `agent_runner.py` is still one large file
 

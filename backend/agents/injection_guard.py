@@ -25,8 +25,13 @@ from typing import List
 # (name shown to the operator, pattern). Names are short so they fit on a finding card.
 _RULES = (
     ("ignore-instructions", r"\b(?:ignore|disregard|forget|override)\b[^.\n]{0,40}\b(?:previous|prior|above|earlier|your|all|any)\b[^.\n]{0,30}\b(?:instructions?|prompts?|rules?|guidelines?)\b"),
+    # The same request in other words (2026-11-18, beta record Part C8). Patterns cannot catch every paraphrase; these are
+    # the common ones. "drop" is left out on purpose: "drop all firewall rules" is ordinary admin text.
+    ("ignore-instructions", r"\b(?:pay\s+no\s+attention\s+to|set\s+aside|no\s+longer\s+(?:follow|obey)|stop\s+(?:following|obeying)|abandon|throw\s+out)\b"
+                            r"[^.\n]{0,30}\b(?:previous|prior|above|earlier|your|all|any|the|those|these)\b[^.\n]{0,30}\b(?:instructions?|prompts?|guidelines?|directions?|directives?)\b"),
     ("new-instructions", r"\bnew\s+(?:instructions?|rules?|system\s+prompt)\b"),
-    ("role-change", r"\byou\s+are\s+now\b|\bact\s+as\s+(?:an?\s+)?(?:\w+\s+){0,3}(?:assistant|model|ai|admin)\b|\bpretend\s+(?:to\s+be|you)\b"),
+    ("role-change", r"\byou\s+are\s+now\b|\bact\s+as\s+(?:an?\s+)?(?:\w+\s+){0,3}(?:assistant|model|ai|admin)\b|\bpretend\s+(?:to\s+be|you)\b"
+                    r"|\bfrom\s+now\s+on,?\s+you\s+(?:are|will|must|should|answer|respond|reply)\b"),
     ("role-marker", r"(?im)^\s*(?:system|assistant|developer)\s*[:>]|</?\s*(?:system|assistant|evidence|instructions?)\s*>|\[/?(?:INST|SYS)\]|<\|(?:im_start|im_end|system)\|>"),
     ("answer-dictation", r"(?i)\b(?:respond|reply|answer|output|return|say)\b[^.\n]{0,30}\b(?:benign|safe|harmless|false\s+positive|not\s+(?:a\s+)?(?:threat|malicious))\b"),
     ("verdict-in-evidence", r"(?i)[\"']?verdict[\"']?\s*[:=]\s*[\"']?(?:benign|malicious|suspicious)"),
@@ -47,10 +52,26 @@ _RULES_INTL = (
                          r"\b(?:benin|inoffensif|sans\s+danger|benigno|seguro|inofensivo|harmlos|gutartig|sicher|innocuo|sicuro)\b"),
     ("answer-dictation", r"(?:\u043e\u0442\u0432\u0435\u0442\u044c|\u043e\u0442\u0432\u0435\u0447\u0430\u0439|\u043e\u0442\u0432\u0435\u0442\u044c\u0442\u0435)[^.\n]{0,30}(?:\u0431\u0435\u0437\u043e\u043f\u0430\u0441\u043d\w*|\u0431\u0435\u0437\u0432\u0440\u0435\u0434\u043d\w*|\u0434\u043e\u0431\u0440\u043e\u043a\u0430\u0447\u0435\u0441\u0442\u0432\u0435\u043d\w*)"),
     ("answer-dictation", r"(?:\u56de\u7b54|\u56de\u590d|\u8f93\u51fa)[^\u3002\n]{0,12}(?:\u65e0\u5bb3|\u826f\u6027|\u5b89\u5168|\u4e0d\u662f\u5a01\u80c1)"),
+    # Japanese, Korean and Arabic (2026-11-18, Part C8). Japanese and Korean put the object first ("instructions-ignore"),
+    # so both orders are matched. Arabic is written without hamza here because the accent-free text loses it.
+    ("ignore-instructions", "(?:\u6307\u793a|\u547d\u4ee4|\u30eb\u30fc\u30eb|\u6307\u4ee4|\u30d7\u30ed\u30f3\u30d7\u30c8)[^\u3002\n]{0,12}(?:\u7121\u8996|\u5fd8\u308c)"
+                            "|(?:\u7121\u8996|\u5fd8\u308c)[^\u3002\n]{0,12}(?:\u6307\u793a|\u547d\u4ee4|\u30eb\u30fc\u30eb)"),
+    ("ignore-instructions", "(?:\uc9c0\uc2dc|\uba85\ub839|\uc9c0\uce68|\uaddc\uce59|\ud504\ub86c\ud504\ud2b8)[^.\n]{0,12}(?:\ubb34\uc2dc|\uc78a\uc5b4)"),
+    ("ignore-instructions", "(?:\u062a\u062c\u0627\u0647\u0644|\u0627\u0646\u0633|\u0627\u0646\u0633\u0649)[^.\n]{0,40}"
+                            "(?:\u0627\u0644\u062a\u0639\u0644\u064a\u0645\u0627\u062a|\u062a\u0639\u0644\u064a\u0645\u0627\u062a|\u0627\u0644\u0627\u0648\u0627\u0645\u0631|\u0627\u0644\u0642\u0648\u0627\u0639\u062f)"),
+    ("role-change", "\u3042\u306a\u305f\u306f\u4eca|\u4eca\u304b\u3089\u3042\u306a\u305f\u306f|\ub108\ub294\\s*\uc774\uc81c|\ub2f9\uc2e0\uc740\\s*\uc774\uc81c|\u0627\u0646\u062a\\s+\u0627\u0644\u0627\u0646"),
+    ("answer-dictation", "(?:\u7121\u5bb3|\u5b89\u5168|\u826f\u6027)[^\u3002\n]{0,12}(?:\u3068\u7b54\u3048|\u3068\u56de\u7b54|\u3068\u51fa\u529b)"
+                         "|(?:\ubb34\ud574|\uc548\uc804|\uc591\uc131)[^.\n]{0,12}(?:\ub77c\uace0|\uc73c\ub85c|\ub85c)\\s*(?:\ub2f5|\uc751\ub2f5)"
+                         "|(?:\u0627\u062c\u0628|\u0631\u062f)[^.\n]{0,30}(?:\u0627\u0645\u0646|\u063a\u064a\u0631\\s+\u0636\u0627\u0631|\u062d\u0645\u064a\u062f)"),
 )
 _COMPILED = tuple((name, re.compile(rx, re.I)) for name, rx in _RULES + _RULES_INTL)
-# Characters that hide text from a human reader but not from a model: zero-width and bidirectional controls.
-_HIDDEN = re.compile("[\u200b\u200c\u200d\u2060\ufeff\u202a-\u202e\u2066-\u2069]")
+# Characters that hide text from a human reader but not from a model: zero-width and bidirectional controls, the soft
+# hyphen and invisible operators, and (2026-11-18, Part C8) Unicode "tag" characters U+E0000-U+E007F, which some models
+# read as plain ASCII although nothing is shown on screen.
+_HIDDEN = re.compile("[\u180e\u200b\u200c\u200d\u2060-\u2064\ufeff\u202a-\u202e\u2066-\u2069\U000e0000-\U000e007f]")
+# Removed before matching but not flagged by itself: the soft hyphen is common in ordinary HTML mail.
+_INVISIBLE = re.compile("[\u00ad\u180e\u200b\u200c\u200d\u2060-\u2064\ufeff\u202a-\u202e\u2066-\u2069\U000e0000-\U000e007f]")
+_TAGS = re.compile("[\U000e0020-\U000e007e]+")
 _FENCE = re.compile(r"(?i)<\s*(/?)\s*(evidence|peers)\b")
 
 MAX_INPUT = 20_000            # characters scanned; evidence is never longer than this in a prompt anyway
@@ -61,11 +82,15 @@ _LOOKALIKE = str.maketrans("\u0430\u0441\u0435\u043e\u0440\u0445\u0443\u0456\u04
                            "aceopxyijsdqwABEKMHOPCTXYIJSabeiknoptuxABEHIKMNOPTYX")
 _LEET = str.maketrans("013457@$!|", "oieastasil")
 _SPACED = re.compile(r"\b(?:[^\W\d_][ .\-_*]){3,}[^\W\d_]\b")              # i g n o r e  /  i.g.n.o.r.e
-_B64 = re.compile(r"(?<![A-Za-z0-9+/=_-])[A-Za-z0-9+/_-]{16,}={0,2}(?![A-Za-z0-9+/=_-])")
+# '=' may come before a token (2026-11-18): "payload=<base64>" was never decoded, because '=' was taken for padding.
+_B64 = re.compile(r"(?<![A-Za-z0-9+/_-])[A-Za-z0-9+/_-]{16,}={0,2}(?![A-Za-z0-9+/=_-])")
 _HEX = re.compile(r"(?<![0-9A-Fa-f])(?:[0-9A-Fa-f]{2}){8,}(?![0-9A-Fa-f])")
 _URLENC = re.compile(r"(?:%[0-9A-Fa-f]{2}){3,}")
 _HTMLENT = re.compile(r"&(?:#\d{2,6}|#x[0-9A-Fa-f]{2,6}|[A-Za-z]{2,8});")
 _UESC = re.compile(r"\\u[0-9A-Fa-f]{4}|\\x[0-9A-Fa-f]{2}")
+_B32 = re.compile(r"(?<![A-Za-z0-9=])[A-Z2-7]{16,}={0,6}(?![A-Za-z0-9=])")
+_ROT47 = str.maketrans("".join(chr(c) for c in range(33, 127)), "".join(chr(33 + (c - 33 + 47) % 94) for c in range(33, 127)))
+DECODE_DEPTH = 2              # an encoded piece inside an encoded piece (base64 of base64) is decoded too, once more
 
 
 def _strip_accents(s: str) -> str:
@@ -84,13 +109,36 @@ def _readable(raw: bytes) -> str:
 
 
 def _decoded_pieces(text: str) -> List[str]:
-    """Text hidden in base64, hex, URL, HTML or \\u encodings, at most MAX_DECODED pieces."""
+    """Text hidden in Unicode tags, base64, base32, hex, URL, HTML or \\u encodings, at most MAX_DECODED pieces in all. A
+    decoded piece is itself decoded again, DECODE_DEPTH levels in all."""
+    out: List[str] = []
+    level = [text]
+    for _ in range(DECODE_DEPTH):
+        found: List[str] = []
+        for t in level:
+            if len(out) >= MAX_DECODED:
+                break
+            for piece in _decode_once(t, MAX_DECODED - len(out)):
+                if piece not in out and piece != t:
+                    out.append(piece)
+                    found.append(piece)
+        level = found
+        if not level:
+            break
+    return out[:MAX_DECODED]
+
+
+def _decode_once(text: str, room: int) -> List[str]:
+    """One level of decoding of `text`, at most `room` pieces."""
     out: List[str] = []
 
     def add(s):
-        if s and len(out) < MAX_DECODED:
+        if s and len(out) < room:
             out.append(s)
 
+    tags = "".join(_TAGS.findall(text))
+    if tags:
+        add("".join(chr(ord(c) - 0xE0000) for c in tags))
     if _URLENC.search(text):
         add(urllib.parse.unquote(text))
     if _HTMLENT.search(text):
@@ -98,7 +146,7 @@ def _decoded_pieces(text: str) -> List[str]:
     if _UESC.search(text):
         add(_UESC.sub(lambda m: chr(int(m.group(0)[2:], 16)), text))
     for m in _B64.finditer(text):
-        if len(out) >= MAX_DECODED:
+        if len(out) >= room:
             break
         token = m.group(0)
         padded = token + "=" * (-len(token) % 4)
@@ -110,8 +158,16 @@ def _decoded_pieces(text: str) -> List[str]:
             if s:
                 add(s)
                 break
+    for m in _B32.finditer(text):
+        if len(out) >= room:
+            break
+        token = m.group(0).rstrip("=")
+        try:
+            add(_readable(base64.b32decode(token + "=" * (-len(token) % 8))))
+        except (ValueError, binascii.Error):
+            continue
     for m in _HEX.finditer(text):
-        if len(out) >= MAX_DECODED:
+        if len(out) >= room:
             break
         add(_readable(bytes.fromhex(m.group(0))))
     return out
@@ -120,11 +176,11 @@ def _decoded_pieces(text: str) -> List[str]:
 def _variants(text: str) -> List[str]:
     """Ways the same words can be disguised: full-width or accented letters, look-alike letters, leetspeak, spaced or reversed
     letters, ROT13. Each variant is matched separately."""
-    nfkc = unicodedata.normalize("NFKC", text)
+    nfkc = _INVISIBLE.sub("", unicodedata.normalize("NFKC", text))   # i<zero-width>gnore -> ignore
     plain = _strip_accents(nfkc)
     latin = plain.translate(_LOOKALIKE)
     out = [nfkc, plain, latin, latin.translate(_LEET), _SPACED.sub(lambda m: re.sub(r"[ .\-_*]", "", m.group(0)), latin),
-           latin[::-1], codecs.decode(latin, "rot13")]
+           latin[::-1], codecs.decode(latin, "rot13"), text.translate(_ROT47)]
     return [v for i, v in enumerate(out) if v and v not in out[:i]]
 
 

@@ -112,6 +112,31 @@ class ProviderRequests(unittest.TestCase):
             setattr(p, k, v)
         return p
 
+    def test_ollama_discovery_never_guesses_the_router_unless_asked(self):
+        # audit O-1 (2026-11-18): whatever answers at the router's address would become a trusted voter
+        P = swarm._OllamaProvider
+        router = lambda: '192.0.2.1'          # noqa: E731
+        got = P.candidates('http://198.51.100.20:11434', env={'OLLAMA_HOSTS': '198.51.100.21, http://198.51.100.22:11434'},
+                           gateway=router)
+        self.assertEqual(got, ['http://198.51.100.20:11434', 'http://localhost:11434', 'http://198.51.100.21:11434',
+                               'http://198.51.100.22:11434'])
+        self.assertNotIn('http://192.0.2.1:11434', got)
+        got = P.candidates('', env={'SSAI_OLLAMA_DISCOVER': '1'}, gateway=router)
+        self.assertEqual(got, ['http://localhost:11434', 'http://192.0.2.1:11434'])          # opt-in, and tried last
+        self.assertEqual(P.candidates('http://localhost:11434', env={}, gateway=router), ['http://localhost:11434'])
+
+    def test_ollama_not_found_is_logged_without_error(self):
+        from unittest import mock
+        P = swarm._OllamaProvider
+        module = sys.modules[P.__module__]
+
+        def refuse(*a, **k):
+            raise OSError('refused')                    # nothing answers anywhere (and nothing is really contacted)
+        with mock.patch.object(module.requests, 'get', refuse), \
+                mock.patch.dict(os.environ, {'OLLAMA_URL': '', 'OLLAMA_HOSTS': '', 'SSAI_OLLAMA_DISCOVER': ''}):
+            p = P()
+        self.assertFalse(p.available)
+
     def test_ollama_json_mode_is_off_by_default(self):
         os.environ.pop('OLLAMA_JSON_MODE', None)
         call, out = self.run_provider(self.ollama(), {'response': '{"verdict":"benign"}'})

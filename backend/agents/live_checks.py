@@ -145,9 +145,27 @@ def failed_login_count(ip: Optional[str], read_tail=None, now: Optional[datetime
     if lines is None:
         return None
     now = now or datetime.now().astimezone()
-    source = _addr().ssh_source
-    return sum(1 for ln in lines if ("Failed password" in ln or "Invalid user" in ln) and _recent(ln, now)
-               and (ip is None or source(ln) == ip))
+    return sum(1 for f in _failures(lines, now) if ip is None or f["ip"] == ip)
+
+
+def _failures(lines, now, password_only=False):
+    """The failed SSH logins in these lines from the last 48 hours, read exactly as AuthLogAgent counts them
+    (agent_util.ssh_failure, 2026-11-18): any failed method, plus a connection that gave up before logging in, once per
+    connection and not when that connection's failures were already counted."""
+    reader, seen, out = _addr().ssh_failure, set(), []
+    for ln in lines:
+        f = reader(ln)
+        if f is None or not f["ip"] or not _recent(ln, now):
+            continue
+        conn = (f["ip"], f["port"]) if f["port"] else None
+        if f["kind"] == "gave-up" and conn in seen:
+            continue
+        if conn:
+            seen.add(conn)
+        if password_only and not f["password"]:
+            continue
+        out.append(dict(f, line=ln))
+    return out
 
 
 def failed_logins(threat: dict, read_tail, now: datetime) -> dict:
@@ -173,11 +191,13 @@ def login_after_failures(threat: dict, read_tail, now: datetime) -> dict:
     if not ip:
         return _result(INCONCLUSIVE, "auth-log", "the finding names no address")
     for ln in lines:
-        if au.ssh_source(ln) != ip or not _recent(ln, now):
+        if not _recent(ln, now):
             continue
-        if "Failed password" in ln or "Invalid user" in ln:
-            fails += 1
-        elif "Accepted " in ln and fails >= 1:
+        f = au.ssh_failure(ln)
+        if f is not None:
+            if f["ip"] == ip and f["password"]:                  # password guesses only, as AuthLogAgent counts them
+                fails += 1
+        elif "Accepted " in ln and au.ssh_source(ln) == ip and fails >= 1:
             return _result(CONFIRMED, "auth-log", f"a login from {ip} followed {fails} failed attempts")
     return _result(NOT_CONFIRMED, "auth-log", f"auth.log shows no login from {ip} after failed attempts in the last 48 hours")
 

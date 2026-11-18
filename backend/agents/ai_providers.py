@@ -56,35 +56,51 @@ class _OllamaProvider:
         self.available = False
         self._discover()
 
-    def _discover(self):
-        """Find a working Ollama server (a program that runs AI models on your own hardware) by trying likely addresses
-        in order: OLLAMA_URL, this machine, the router, then OLLAMA_HOSTS. The first one that answers wins and its
-        first installed model is used; if none answers, available stays False."""
+    @staticmethod
+    def candidates(base_url, env=None, gateway=None):
+        """The addresses to try, in order: OLLAMA_URL, this machine, OLLAMA_HOSTS. The router's address is tried only when
+        SSAI_OLLAMA_DISCOVER=1 (audit O-1, 2026-11-18): whatever answers there would become a trusted voter and receive
+        local evidence that is not scrubbed the way cloud requests are, so on a shared or guest network anyone who can
+        answer at .1 could read it and steer verdicts. Name your model servers in OLLAMA_URL or OLLAMA_HOSTS instead.
+        `gateway` is a function returning the guessed router address (tests pass a fake)."""
+        env = os.environ if env is None else env
+        out = [base_url] if base_url else []
+        out.append("http://localhost:11434")
+        for h in env.get("OLLAMA_HOSTS", "").split(","):
+            h = h.strip()
+            if h:
+                out.append(h if "://" in h else f"http://{h}:11434")
+        if str(env.get("SSAI_OLLAMA_DISCOVER", "")).strip().lower() in ("1", "true", "yes", "on"):
+            guess = (gateway or _OllamaProvider._router_guess)()
+            if guess:
+                out.append(f"http://{guess}:11434")
+        seen, ordered = set(), []
+        for url in out:
+            if url not in seen:
+                seen.add(url)
+                ordered.append(url)
+        return ordered
+
+    @staticmethod
+    def _router_guess():
+        """This machine's outward address ending in .1 (a convention, not a guarantee), or None."""
         import socket as _sock
-        candidates = []
-        if self.base_url:
-            candidates.append(self.base_url)
-        candidates.append("http://localhost:11434")
         try:
-            # Connecting a UDP socket sends no data; it only makes the OS pick the network address this machine would use to reach the internet. The router is then guessed to be that address ending in .1, which is a convention, not a guarantee.
+            # Connecting a UDP socket sends no data; it only makes the OS pick the network address this machine would use
+            # to reach the internet.
             s = _sock.socket(_sock.AF_INET, _sock.SOCK_DGRAM)
             s.connect(("8.8.8.8", 80))
             local_ip = s.getsockname()[0]
             s.close()
-            gateway = local_ip.rsplit(".", 1)[0] + ".1"
-            candidates.append(f"http://{gateway}:11434")
-        except Exception:
-            # guessing the router address is a bonus; if it fails the other candidate addresses are still tried
-            pass
-        for h in os.environ.get("OLLAMA_HOSTS", "").split(","):
-            h = h.strip()
-            if h:
-                candidates.append(h if "://" in h else f"http://{h}:11434")
-        seen: set = set()
-        for url in candidates:
-            if url in seen:
-                continue
-            seen.add(url)
+            return local_ip.rsplit(".", 1)[0] + ".1"
+        except Exception:                                  # noqa: BLE001 -- a guess; no guess is fine
+            return None
+
+    def _discover(self):
+        """Find a working Ollama server (a program that runs AI models on your own hardware): the first of candidates()
+        that answers wins and its first installed model is used; if none answers, available stays False."""
+        tried = self.candidates(self.base_url)
+        for url in tried:
             try:
                 r = requests.get(f"{url}/api/tags", timeout=3)
                 if r.ok:
@@ -98,7 +114,7 @@ class _OllamaProvider:
                     return
             except Exception:
                 continue
-        log.warning(f"Ollama not found — tried: {', '.join(seen)}")
+        log.warning(f"Ollama not found — tried: {', '.join(tried)}")
 
     def analyze(self, prompt: str) -> str:
         """Send the prompt to the local Ollama server and return its text reply. Optional settings (CPU thread cap, JSON

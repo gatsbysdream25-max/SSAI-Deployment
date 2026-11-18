@@ -64,6 +64,8 @@ def build(threat: dict, proposal: Optional[dict] = None) -> dict:
                     "label": quorum.get("label"), "agreed": quorum.get("agreed"), "answered": quorum.get("answered"), "panel": quorum.get("panel"),
                     "dropped": quorum.get("dropped") or [], "degraded": bool(quorum.get("degraded")), "panel_mode": consensus.get("panel_mode")},
         "positions": consensus.get("positions") or [],
+        # recorded by the hub when the verdict was saved (action_risk.annotate); None for verdicts saved before 18 Nov 2026
+        "families_agreeing": consensus.get("families_agreeing") if isinstance(consensus.get("families_agreeing"), list) else None,
         "challenge": consensus.get("challenge") or {},
         "local_proof": consensus.get("evidence") or {},
         "independent_check": consensus.get("verification") or {},
@@ -90,7 +92,12 @@ def to_markdown(report: dict) -> str:
         lines += ["## Read this first", ""] + [f"- {c}" for c in report["caveats"]] + [""]
     lines += ["## What each model said", ""]
     for position in report["positions"]:
-        lines.append(f"- **{position.get('ai')}**: {position.get('verdict')}, {position.get('severity')}, {position.get('confidence')}%. {position.get('reason') or ''}".rstrip())
+        family = f" ({position['family']} family)" if position.get("family") else ""
+        lines.append(f"- **{position.get('ai')}**{family}: {position.get('verdict')}, {position.get('severity')}, {position.get('confidence')}%. {position.get('reason') or ''}".rstrip())
+    families = report.get("families_agreeing")
+    if families is not None:
+        lines += ["", f"Independent model families that said malicious: {', '.join(families) if families else 'none'} "
+                      f"({len(families)}; judged from this hub's own model list, not from the verdict)."]
     challenge = report["challenge"]
     if challenge.get("ran"):
         moved = ", ".join(f"{x['ai']} ({x['from']} -> {x['to']})" for x in challenge.get("changed", [])) or "nobody changed their mind"

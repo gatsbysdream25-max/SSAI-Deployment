@@ -100,6 +100,7 @@
   .toast.err { border-color: var(--red); color: var(--red); }
 
   .hint { font-size: 10px; color: var(--text-muted); margin-top: 4px; }
+  .enrol-block { border: 1px solid var(--border, #1e2d40); border-radius: 8px; padding: 10px 12px; margin: 8px 0; }
 </style>
 </head>
 <body>
@@ -125,11 +126,11 @@
     <button class="save-btn" data-on-click="signOut">Sign out</button>
   </div>
 
-  <div class="section-title" style="margin-top:34px">Machines — other computers reporting to this hub. Each has its own credential, which you can revoke at any time. To add one, create a single-use code and run the command shown on that machine.</div>
+  <div class="section-title" style="margin-top:34px">Machines — other computers and browser extensions reporting to this hub. Each has its own credential, which you can revoke at any time. To add one, create a single-use code: a browser extension needs only the hub address and the code; a computer runs the command shown.</div>
   <div id="node-list"></div>
   <div class="agent-card">
-    <div class="agent-hdr"><div class="agent-name">Add a machine</div></div>
-    <div class="hint" style="margin:6px 0 10px">Optional name for the machine (letters, digits, dot, dash). Leave empty to let it use its hostname.</div>
+    <div class="agent-hdr"><div class="agent-name">Add a machine or a browser extension</div></div>
+    <div class="hint" style="margin:6px 0 10px">Optional name (letters, digits, dot, dash), for example <b>browser-chrome</b>. Leave empty to let a computer use its hostname. One code per machine or browser: each code works once.</div>
     <input type="text" id="node-name" placeholder="e.g. web-server-1" style="margin-bottom:10px">
     <button class="save-btn" data-on-click="addMachine">Create enrollment code</button>
     <div id="node-code"></div>
@@ -295,11 +296,63 @@ async function addMachine() {
     const d = await nodeCall('POST', '/api/nodes/enrollment-codes', name ? { node_id: name } : {});
     const cmd = `curl -fsSL https://github.com/gatsbysdream25-max/SSAI-Deployment/releases/latest/download/get-ssai.sh | sudo bash -s -- --role node --hub-url ${location.origin} --enroll-code ${d.code}`;
     const winCmd = `Invoke-WebRequest https://github.com/gatsbysdream25-max/SSAI-Deployment/releases/latest/download/install-windows-agent.ps1 -OutFile $env:TEMP\\install-agent.ps1; & $env:TEMP\\install-agent.ps1 -HubUrl ${location.origin} -EnrollCode ${d.code}`;
+    const plain = location.protocol === 'http:';
+    const box = 'white-space:pre-wrap;word-break:break-all;background:#0000002e;padding:8px;border-radius:6px;margin:0';
+    const copyBtn = id => `<button class="save-btn" style="margin-left:8px" data-on-click="copyText" data-args="${escH(JSON.stringify([id]))}">Copy</button>`;
+    // 2026-11-18: the browser extension needs only the address and the code; people were pasting the Linux install command.
     document.getElementById('node-code').innerHTML = `
-      <div class="hint" style="margin:12px 0 4px">Single use, expires in ${escH(d.ttl_minutes)} minutes${d.node_id ? `, bound to the name <b>${escH(d.node_id)}</b>` : ''}. On a Linux machine (Ubuntu or Debian), run this one line:</div>
-      <pre style="white-space:pre-wrap;word-break:break-all;background:#0000002e;padding:8px;border-radius:6px">${escH(cmd)}</pre><div class="hint" style="margin:12px 0 4px">On a Windows PC, in PowerShell opened as administrator (add <b>-AutoStart Off</b> if it should not start at every boot):</div><pre style="white-space:pre-wrap;word-break:break-all;background:#0000002e;padding:8px;border-radius:6px">${escH(winCmd)}</pre>`;
+      <div class="hint" style="margin:12px 0 8px">Single use, expires in ${escH(d.ttl_minutes)} minutes${d.node_id ? `, bound to the name <b>${escH(d.node_id)}</b>` : ''}. Use it in ONE of these:</div>
+      <div class="enrol-block">
+        <div class="agent-name" style="margin-bottom:6px">Browser extension (Chrome, Brave, Edge, Firefox)</div>
+        <div class="hint" style="margin-bottom:6px">Click the SwarmSentinel Shield icon in the toolbar and paste these two. Do not run anything.</div>
+        <div style="display:flex;align-items:center;margin:4px 0"><span class="hint" style="width:120px">Hub address</span><code id="enrol-hub" style="${box}">${escH(location.origin)}</code>${copyBtn('enrol-hub')}</div>
+        <div style="display:flex;align-items:center;margin:4px 0"><span class="hint" style="width:120px">Enrolment code</span><code id="enrol-code" style="${box}">${escH(d.code)}</code>${copyBtn('enrol-code')}</div>
+        ${plain ? '<div class="hint" style="margin-top:6px">This hub uses <b>http://</b>, so also tick <b>"My hub is on my own network and not using HTTPS"</b>, then Connect and Allow.</div>' : ''}
+      </div>
+      <div class="enrol-block">
+        <div class="agent-name" style="margin-bottom:6px">Linux computer (Ubuntu or Debian)</div>
+        <div class="hint" style="margin-bottom:6px">Run this one line in a terminal on that computer:</div>
+        <pre id="enrol-linux" style="${box}">${escH(cmd)}</pre>${copyBtn('enrol-linux')}
+      </div>
+      <div class="enrol-block">
+        <div class="agent-name" style="margin-bottom:6px">Windows PC</div>
+        <div class="hint" style="margin-bottom:6px">In PowerShell opened as administrator (add <b>-AutoStart Off</b> if it should not start at every boot):</div>
+        <pre id="enrol-windows" style="${box}">${escH(winCmd)}</pre>${copyBtn('enrol-windows')}
+      </div>`;
   } catch (e) {
     showToast('Could not create a code: ' + e.message, false);
+  }
+}
+
+async function copyText(id) {
+  // The hub usually runs on plain http:// inside the network, where browsers refuse navigator.clipboard; the hidden
+  // text-area fallback works there.
+  const el = document.getElementById(id);
+  const text = el ? el.textContent : '';
+  if (!text) return;
+  try {
+    if (navigator.clipboard && window.isSecureContext) {
+      await navigator.clipboard.writeText(text);
+    } else {
+      const t = document.createElement('textarea');
+      t.value = text;
+      t.setAttribute('readonly', '');
+      t.style.position = 'fixed';
+      t.style.opacity = '0';
+      document.body.appendChild(t);
+      t.select();
+      const ok = document.execCommand('copy');
+      t.remove();
+      if (!ok) throw new Error('copy refused');
+    }
+    showToast('Copied', true);
+  } catch (e) {
+    const range = document.createRange();          // last resort: select it so Ctrl+C works
+    range.selectNodeContents(el);
+    const sel = window.getSelection();
+    sel.removeAllRanges();
+    sel.addRange(range);
+    showToast('Selected: press Ctrl+C to copy', false);
   }
 }
 
@@ -793,7 +846,7 @@ loadAuto();
 loadAutoLog();
 loadPreflight();
 loadAlerts();
-SSAI.register({ ackAlert, addMachine, autoKeep, autoTerminate, autoUndo, changePassword, clearMicrosoft, clearUpdateToken, deleteNode, engageBreakGlass,
+SSAI.register({ ackAlert, addMachine, copyText, autoKeep, autoTerminate, autoUndo, changePassword, clearMicrosoft, clearUpdateToken, deleteNode, engageBreakGlass,
                 loadAutoLog, recheckModel, releaseBreakGlass,
                 revokeNode, saveMicrosoft, saveModelKey, saveRouting, saveUpdateToken, sendTestAlert, setAutoDry, setAutoHours,
                 setAutoMaster, setAutoStandard, signOut, toggleAgent, toggleAutoAction, toggleConsensusPause, toggleModel });

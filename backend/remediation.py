@@ -200,6 +200,18 @@ class PiHole:
         except (requests.exceptions.RequestException, ValueError) as e:
             raise RemediationError(f'could not reach Pi-hole at {self.host}: {e}') from e
 
+    def check(self):
+        """(True, detail) when Pi-hole answers and accepts the login (one login and logout, nothing changed), else
+        (False, the reason). Used by the Settings preflight: "configured" alone is not "working" (2026-11-18: PIHOLE_IP
+        pointed at a host whose Pi-hole had been gone for a month, and the preflight still said it was fine)."""
+        try:
+            r = self._call('GET', '/api/info/version')
+        except RemediationError as e:
+            return False, str(e)
+        if r.status_code != 200:
+            return False, f'Pi-hole at {self.host} answered HTTP {r.status_code}'
+        return True, f'Pi-hole at {self.host} answers and accepts the login'
+
     def get_json(self, path):
         r = self._call('GET', path)
         if r.status_code != 200:

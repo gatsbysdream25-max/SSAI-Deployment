@@ -157,3 +157,67 @@ def channels() -> dict:
 
 def a_channel_works() -> bool:
     return any(c["working"] for c in channels().values())
+
+
+# ── a block that cannot be undone (Week 2 follow-up, 2026-11-18) ──────────────
+# The sweeps retry a failed undo on every run and only wrote the failure to the audit log, so a block could outlive its time
+# limit for days without anyone knowing. After UNDO_FAILURES_BEFORE_ALERT failures in a row, one alert asks a person to look.
+UNDO_FAILURES_BEFORE_ALERT = 3
+
+
+def undo_failures_path() -> str:
+    return os.path.join(_dir(), "undo_failures.json")
+
+
+def _read_undo_failures() -> dict:
+    try:
+        with open(undo_failures_path(), encoding="utf-8") as f:
+            raw = json.load(f)
+        return raw if isinstance(raw, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def _write_undo_failures(state: dict) -> None:
+    path = undo_failures_path()
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    tmp = path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(state, f, indent=1)
+    os.chmod(tmp, 0o600)
+    os.replace(tmp, path)
+
+
+def undo_failed(key: str, what: str, error: str, finding: Optional[int] = None) -> Optional[dict]:
+    """Count one failed undo of `key` (for example "auto:12" or "queue:7"); raise ONE alert when it reaches
+    UNDO_FAILURES_BEFORE_ALERT in a row. Returns the alert when one was raised. Never raises."""
+    try:
+        with _LOCK:
+            state = _read_undo_failures()
+            one = state.get(key) if isinstance(state.get(key), dict) else {}
+            one = {"count": int(one.get("count") or 0) + 1, "alerted": bool(one.get("alerted")), "last": _now()}
+            due = one["count"] >= UNDO_FAILURES_BEFORE_ALERT and not one["alerted"]
+            if due:
+                one["alerted"] = True
+            state[key] = one
+            _write_undo_failures(state)
+    except OSError as exc:
+        log.warning(f"undo failure for {key} not counted: {type(exc).__name__}: {exc}")
+        return None
+    if not due:
+        return None
+    return raise_alert("undo-failed", f"A block could not be undone: {what}"[:160],
+                       f"tried {one['count']} times after its time limit; last error: {error}"[:400], finding=finding,
+                       level="high")
+
+
+def undo_succeeded(key: str) -> None:
+    """Forget the failures of `key` once its undo worked. Never raises."""
+    try:
+        with _LOCK:
+            state = _read_undo_failures()
+            if key in state:
+                del state[key]
+                _write_undo_failures(state)
+    except OSError:
+        pass
