@@ -9,7 +9,8 @@
 
   What it does, in order. Nothing is changed until you drop -CheckOnly:
     1. Checks the PC (Windows version, memory, disk, virtualization, administrator rights).
-    2. Installs WSL2 and Ubuntu 24.04 if they are missing (this can need one restart: run the script again after it).
+    2. Installs WSL2 and Ubuntu 24.04 if they are missing, ONLY with -AllowRestart: it turns on Windows features and needs a
+       restart (run the script again after it). Without -AllowRestart it stops and changes nothing.
     3. Turns on systemd inside Ubuntu, so the services start like on a normal Ubuntu machine.
     4. Unpacks your SwarmSentinel package inside Ubuntu and runs deploy/install.sh there.
     5. Adds a Windows scheduled task that keeps WSL2 running, because Windows stops an idle WSL2 and the services with it.
@@ -41,7 +42,8 @@ param(
     [string]$EnrollCode = "",
     [string]$Distro = "Ubuntu-24.04",
     [switch]$CheckOnly,
-    [switch]$SkipModels
+    [switch]$SkipModels,
+    [switch]$AllowRestart       # needed only when WSL2 is missing: installing it turns on Windows features and needs a restart
 )
 
 $ErrorActionPreference = "Stop"
@@ -171,14 +173,28 @@ if ($CheckOnly) {
     Say ""
     $blockers = @($script:Problems | Where-Object { $_ -notmatch "not installed yet" })
     if ($blockers.Count -gt 0) { Say "$($blockers.Count) thing(s) to sort out first (marked [!]). Nothing was changed." }
-    elseif (-not $ready) { Say "This PC is fine. The install will add WSL2 and Ubuntu first. Nothing was changed." }
+    elseif (-not $ready) { Say "This PC is fine. The install must add WSL2 and $Distro first: that turns on Windows features and needs a RESTART (it asks for -AllowRestart). Nothing was changed." }
     else { Say "Everything needed is in place. Run again without -CheckOnly and with -Package to install." }
     exit 0
 }
 if ($script:Problems | Where-Object { $_ -notmatch "not installed yet" }) { Fail "fix the items marked [!] above, then run again" }
 if (-not $Package) { Fail "give the package with -Package <path to swarmsentinel-*.tar.gz>" }
 
-if (-not $ready) { Install-Wsl }
+if (-not $ready) {
+    # 2026-11-18: installing WSL2 turns on Windows features (WSL, Virtual Machine Platform: the hypervisor) and Windows then
+    # needs a restart, which on some PCs is slow, asks for the BitLocker recovery key, or fails to boot. Never do that as a
+    # side effect of an install or update: only when the person said so with -AllowRestart.
+    $others = @(Get-WslDistros | Where-Object { $_ -match '^Ubuntu' -and $_ -ne $Distro })
+    Say ""
+    Write-Host "STOP: WSL2 with $Distro is not on this PC. Installing it turns on Windows features and NEEDS A RESTART." -ForegroundColor Yellow
+    if ($others.Count -gt 0) {
+        Say "This PC already has: $($others -join ', '). To use that instead (no restart), run again with -Distro $($others[0])"
+    }
+    Say "If BitLocker is on, have the recovery key ready (account.microsoft.com/devices/recoverykey)."
+    Say "To go ahead with the restart, run again with -AllowRestart. Nothing was changed."
+    if (-not $AllowRestart) { exit 0 }
+    Install-Wsl
+}
 Enable-Systemd
 Install-SwarmSentinel
 Add-KeepAliveTask

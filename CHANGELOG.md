@@ -1,5 +1,14 @@
 # Changelog
 
+## 2026-11-18 (v0.1.11): the Windows installer never restarts a PC on its own
+
+- `install-windows.ps1` no longer turns on WSL2 by itself. Installing WSL2 turns on Windows features (WSL, Virtual Machine
+  Platform) and Windows must restart, which on some PCs is slow, asks for the BitLocker recovery key or fails to start.
+  It now stops, says why, and changes nothing unless it is run with `-AllowRestart`. `-CheckOnly` warns about the restart.
+- If the PC already has an Ubuntu under another name (for example `Ubuntu`), it says so: `-Distro <name>` uses it with no
+  restart.
+- To update an install that already runs inside WSL, use `deploy/update.sh` inside Ubuntu; it never touches Windows.
+
 ## 2026-11-18 (v0.1.10): accurate dashboard numbers, Gmail extension, Week 3 quality fixes
 
 ### Dashboard numbers
